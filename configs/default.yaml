@@ -1,0 +1,29 @@
+data:
+  cricsheet_results_url: "https://cricsheet.org/downloads/t20s_json.zip"
+  fixtures_url: "https://site.web.api.espn.com/apis/v2/sports/cricket/scoreboard"
+  competitions: ["intl-t20", "t20-league"]
+  lookback_matches: 3500
+
+features:
+  elo_k: 20.0
+  home_advantage_elo: 25.0
+  recent_form_window: 5
+
+strategy:
+  min_edge_bps: 250.0
+  min_model_prob: 0.53
+  max_position_usd: 250.0
+  daily_risk_budget_usd: 1000.0
+  fee_bps: 10.0
+  kelly_fraction: 0.25
+
+bandit:
+  alpha: 1.5
+  risk_lambda: 0.15
+  l2_reg: 1.0
+  stake_arms: [0, 25, 50, 100, 150, 250]
+
+runtime:
+  base_currency: "USD"
+  artifact_dir: "artifacts"
+  timezone: "UTC"
