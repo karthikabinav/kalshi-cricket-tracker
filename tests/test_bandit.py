@@ -19,6 +19,21 @@ def test_bandit_update_changes_params():
     assert (b.b[50] != pre).any()
 
 
+def test_bandit_edge_gate_blocks_low_edge():
+    b = RiskAwareLinUCBBandit(n_features=2, stake_arms=[0, 50], alpha=0.0)
+    x = pd.Series([1.0, 0.0]).to_numpy()
+    d = b.choose(x=x, p_model=0.505, market_prob=0.5, remaining_budget=100, min_edge_bps=100)
+    assert d.action == "HOLD"
+    assert d.stake_usd == 0
+
+
+def test_bandit_tie_break_prefers_non_zero_arm():
+    b = RiskAwareLinUCBBandit(n_features=2, stake_arms=[0, 50], alpha=0.0)
+    x = pd.Series([1.0, 0.0]).to_numpy()
+    d = b.choose(x=x, p_model=0.6, market_prob=0.5, remaining_budget=100)
+    assert d.stake_usd == 50
+
+
 def test_run_bandit_backtest_outputs_metrics():
     df = pd.DataFrame(
         {
@@ -37,3 +52,4 @@ def test_run_bandit_backtest_outputs_metrics():
     out, metrics = run_bandit_backtest(df, stake_arms=[0, 25, 50], alpha=0.5, risk_lambda=0.05, l2_reg=1.0, daily_budget=100)
     assert "cum_pnl" in out.columns
     assert "trades" in metrics
+    assert "profit_factor" in metrics

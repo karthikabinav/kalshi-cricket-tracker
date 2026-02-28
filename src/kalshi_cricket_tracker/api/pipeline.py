@@ -19,7 +19,9 @@ def ingest_and_engineer(cfg: AppConfig) -> tuple[pd.DataFrame, pd.DataFrame, dic
 
     rated_matches, ratings = build_team_ratings(matches, k=cfg.features.elo_k)
     rated_matches = add_recent_form(rated_matches, window=cfg.features.recent_form_window)
-    rated_matches["proxy_market_prob_team1"] = 0.5 + (rated_matches["team1_win_prob_pre"] - 0.5) * 0.65
+    rated_matches["proxy_market_prob_team1"] = (
+        0.5 + (rated_matches["team1_win_prob_pre"] - 0.5) * cfg.odds.proxy_shrinkage
+    )
 
     fixtures = FixtureIngestor(cfg.data.fixtures_url).fetch(limit=25)
     odds_adapter = create_odds_adapter(cfg.odds)

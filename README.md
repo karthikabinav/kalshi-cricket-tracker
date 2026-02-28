@@ -17,7 +17,13 @@ MVP research assistant for cricket-driven Kalshi market exploration (**paper mod
 ## Install
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+```
+
+If your host Python lacks `venv`/`pip` (common on minimal Debian images), install first:
+```bash
+sudo apt-get update && sudo apt-get install -y python3-venv python3-pip
 ```
 
 ## Quickstart
@@ -26,6 +32,12 @@ kct run-daily --config configs/default.yaml
 kct backtest --config configs/default.yaml
 kct bandit-backtest --config configs/default.yaml
 streamlit run scripts/dashboard.py -- --config configs/default.yaml
+```
+
+Preflight checks:
+```bash
+python -m py_compile $(find src -name '*.py')
+python -m pytest -q
 ```
 
 Or run end-to-end:

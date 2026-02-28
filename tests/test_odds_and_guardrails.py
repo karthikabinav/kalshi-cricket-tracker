@@ -40,7 +40,22 @@ def test_live_mode_guardrail_requires_confirmation_phrase():
         )
 
 
-def test_live_mode_guardrail_allows_explicit_enablement():
+def test_live_mode_guardrail_requires_env_credentials(monkeypatch):
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_API_SECRET", raising=False)
+    with pytest.raises(LiveTradingGuardrailError):
+        validate_trading_mode(
+            TradingConfig(
+                mode="live",
+                enable_live_trading=True,
+                live_confirmation_phrase=LIVE_CONFIRMATION_PHRASE,
+            )
+        )
+
+
+def test_live_mode_guardrail_allows_explicit_enablement(monkeypatch):
+    monkeypatch.setenv("KALSHI_API_KEY", "dummy")
+    monkeypatch.setenv("KALSHI_API_SECRET", "dummy")
     validate_trading_mode(
         TradingConfig(
             mode="live",

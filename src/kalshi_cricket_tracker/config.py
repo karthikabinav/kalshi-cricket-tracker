@@ -33,6 +33,7 @@ class BanditConfig(BaseModel):
     alpha: float = 1.5
     risk_lambda: float = 0.15
     l2_reg: float = 1.0
+    min_edge_bps: float = 0.0
     stake_arms: list[float] = Field(default_factory=lambda: [0.0, 25.0, 50.0, 100.0, 150.0, 250.0])
 
 
@@ -72,5 +73,7 @@ class AppConfig(BaseModel):
 
 def load_config(path: str | Path) -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config root must be a mapping/object, got: {type(raw).__name__}")
     return AppConfig(**raw)

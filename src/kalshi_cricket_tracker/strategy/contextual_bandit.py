@@ -49,14 +49,25 @@ class RiskAwareLinUCBBandit:
         explore = self.alpha * float(np.sqrt((x.T @ A_inv_x).item()))
         return exploit + explore
 
-    def choose(self, x: np.ndarray, p_model: float, market_prob: float, remaining_budget: float) -> BanditDecision:
+    def choose(
+        self,
+        x: np.ndarray,
+        p_model: float,
+        market_prob: float,
+        remaining_budget: float,
+        min_edge_bps: float = 0.0,
+    ) -> BanditDecision:
         side = "BUY_YES" if p_model >= 0.5 else "BUY_NO"
+        edge_bps = abs(float(p_model) - float(market_prob)) * 10000
+        if edge_bps < max(0.0, min_edge_bps):
+            return BanditDecision(action="HOLD", side=side, stake_usd=0.0, score=0.0)
+
         feasible = [a for a in self.stake_arms if a <= remaining_budget]
         if not feasible:
             return BanditDecision(action="HOLD", side=side, stake_usd=0.0, score=0.0)
 
         scored = [(a, self.arm_score(a, x)) for a in feasible]
-        best_arm, best_score = max(scored, key=lambda t: t[1])
+        best_arm, best_score = max(scored, key=lambda t: (t[1], t[0]))
         if best_arm <= 0:
             return BanditDecision(action="HOLD", side=side, stake_usd=0.0, score=best_score)
         return BanditDecision(action="BET", side=side, stake_usd=best_arm, score=best_score)
@@ -75,7 +86,16 @@ def _pnl_for_outcome(side: str, team1_won: bool, stake: float, fee_rate: float) 
     return gross - abs(stake) * fee_rate
 
 
-def run_bandit_backtest(df: pd.DataFrame, stake_arms: list[float], alpha: float, risk_lambda: float, l2_reg: float, daily_budget: float, fee_bps: float = 10.0) -> tuple[pd.DataFrame, dict]:
+def run_bandit_backtest(
+    df: pd.DataFrame,
+    stake_arms: list[float],
+    alpha: float,
+    risk_lambda: float,
+    l2_reg: float,
+    daily_budget: float,
+    fee_bps: float = 10.0,
+    min_edge_bps: float = 0.0,
+) -> tuple[pd.DataFrame, dict]:
     """
     Required columns:
       date, team1_win_prob_pre, proxy_market_prob_team1, team1_form, team2_form,
@@ -112,7 +132,13 @@ def run_bandit_backtest(df: pd.DataFrame, stake_arms: list[float], alpha: float,
             remaining_budget = daily_budget
 
         x = row[feat_cols].to_numpy(dtype=float)
-        decision = bandit.choose(x, p_model=float(row["team1_win_prob_pre"]), market_prob=float(row["proxy_market_prob_team1"]), remaining_budget=remaining_budget)
+        decision = bandit.choose(
+            x,
+            p_model=float(row["team1_win_prob_pre"]),
+            market_prob=float(row["proxy_market_prob_team1"]),
+            remaining_budget=remaining_budget,
+            min_edge_bps=min_edge_bps,
+        )
 
         stake = decision.stake_usd
         action = decision.action
@@ -148,15 +174,29 @@ def run_bandit_backtest(df: pd.DataFrame, stake_arms: list[float], alpha: float,
 
     trades = out[out["stake_usd"] > 0]
     if trades.empty:
-        metrics = {"trades": 0, "pnl": 0.0, "sharpe": 0.0, "max_drawdown": 0.0, "hit_rate": 0.0}
+        metrics = {
+            "trades": 0,
+            "pnl": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "hit_rate": 0.0,
+            "avg_stake": 0.0,
+            "turnover": 0.0,
+            "profit_factor": 0.0,
+        }
     else:
         rets = trades["pnl"] / trades["stake_usd"].replace(0, np.nan)
         sharpe = np.sqrt(252) * rets.mean() / (rets.std() + 1e-9)
+        gross_profit = trades.loc[trades["pnl"] > 0, "pnl"].sum()
+        gross_loss = abs(trades.loc[trades["pnl"] < 0, "pnl"].sum())
         metrics = {
             "trades": int(len(trades)),
             "pnl": float(trades["pnl"].sum()),
             "sharpe": float(sharpe),
             "max_drawdown": float(out["drawdown"].min()),
             "hit_rate": float((trades["pnl"] > 0).mean()),
+            "avg_stake": float(trades["stake_usd"].mean()),
+            "turnover": float(trades["stake_usd"].sum()),
+            "profit_factor": float(gross_profit / (gross_loss + 1e-9)),
         }
     return out, metrics

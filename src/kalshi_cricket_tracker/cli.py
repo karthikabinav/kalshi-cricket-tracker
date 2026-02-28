@@ -61,7 +61,7 @@ def backtest(config: str = "configs/default.yaml"):
 
     bt_df = rated_matches.copy()
     bt_df["model_prob_team1"] = bt_df["team1_win_prob_pre"]
-    bt_df["proxy_market_prob_team1"] = 0.5 + (bt_df["team1_win_prob_pre"] - 0.5) * 0.65
+    bt_df["proxy_market_prob_team1"] = 0.5 + (bt_df["team1_win_prob_pre"] - 0.5) * cfg.odds.proxy_shrinkage
     bt_df["edge_bps"] = (bt_df["model_prob_team1"] - bt_df["proxy_market_prob_team1"]) * 10000
     bt_df["action"] = bt_df["edge_bps"].apply(lambda x: "BUY_YES" if x > cfg.strategy.min_edge_bps else "HOLD")
     bt_df = apply_risk(bt_df, cfg.strategy)
@@ -86,6 +86,7 @@ def bandit_backtest(config: str = "configs/default.yaml"):
         l2_reg=cfg.bandit.l2_reg,
         daily_budget=cfg.strategy.daily_risk_budget_usd,
         fee_bps=cfg.strategy.fee_bps,
+        min_edge_bps=cfg.bandit.min_edge_bps,
     )
 
     out.to_csv(art / "bandit_backtest.csv", index=False)

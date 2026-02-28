@@ -20,6 +20,7 @@ Discrete stake arms:
 \]
 - \(a_t=0\): no bet.
 - if \(a_t>0\): place BUY_YES if \(p_t\ge0.5\), else BUY_NO.
+- edge gate: abstain unless \(|p_t - m_t|\cdot10000 \ge \text{min_edge_bps}\).
 
 ## Budget Constraint
 Per day budget \(B\). For decision at time \(t\), feasible set:
@@ -52,6 +53,11 @@ A_{a_t}\leftarrow A_{a_t}+x_tx_t^\top,
 \quad
 b_{a_t}\leftarrow b_{a_t}+r_tx_t
 \]
+
+## Evaluation Outputs
+Backtest metrics include:
+- trades, pnl, sharpe, max_drawdown, hit_rate
+- avg_stake, turnover, profit_factor
 
 ## Assumptions
 1. Binary contract payoff approximated as +stake/-stake minus fees.

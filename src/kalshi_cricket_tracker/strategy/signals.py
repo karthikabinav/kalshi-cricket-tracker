@@ -28,7 +28,16 @@ def generate_signals(
         }
         rows.append(rec)
 
-    sigs = pd.DataFrame(rows)
+    base_cols = ["date", "team1", "team2", "venue", "competition", "event_id", "team1_elo", "team2_elo", "model_prob_team1"]
+    sigs = pd.DataFrame(rows, columns=base_cols)
+    if sigs.empty:
+        sigs["market_prob_team1"] = pd.Series(dtype=float)
+        sigs["proxy_market_prob_team1"] = pd.Series(dtype=float)
+        sigs["edge_bps"] = pd.Series(dtype=float)
+        sigs["action"] = pd.Series(dtype=str)
+        sigs["market_side"] = pd.Series(dtype=object)
+        return sigs
+
     adapter = odds_adapter or ProxyOddsAdapter()
     odds = adapter.fetch_probabilities(sigs)
 
