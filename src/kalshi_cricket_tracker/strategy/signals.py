@@ -3,39 +3,50 @@ from __future__ import annotations
 import pandas as pd
 
 from kalshi_cricket_tracker.config import StrategyConfig
+from kalshi_cricket_tracker.odds import OddsAdapter, ProxyOddsAdapter
 
 
-def generate_signals(fixtures: pd.DataFrame, ratings: dict[str, float], cfg: StrategyConfig, home_advantage_elo: float) -> pd.DataFrame:
+def generate_signals(
+    fixtures: pd.DataFrame,
+    ratings: dict[str, float],
+    cfg: StrategyConfig,
+    home_advantage_elo: float,
+    odds_adapter: OddsAdapter | None = None,
+) -> pd.DataFrame:
     rows = []
-    for _, fx in fixtures.iterrows():
+    for idx, fx in fixtures.iterrows():
         t1, t2 = fx["team1"], fx["team2"]
         r1, r2 = ratings.get(t1, 1500.0), ratings.get(t2, 1500.0)
         model_prob = 1.0 / (1.0 + 10 ** ((r2 - (r1 + home_advantage_elo)) / 400))
 
-        # Free odds proxy: convert rating spread to a pseudo-market probability with mild shrinkage.
-        proxy_market_prob = 0.5 + (model_prob - 0.5) * 0.65
-        edge = model_prob - proxy_market_prob
-        edge_bps = edge * 10000
+        rec = {
+            **fx.to_dict(),
+            "event_id": fx.get("event_id") or f"fixture-{idx}",
+            "team1_elo": r1,
+            "team2_elo": r2,
+            "model_prob_team1": model_prob,
+        }
+        rows.append(rec)
 
-        action = "HOLD"
-        side = None
-        if model_prob >= cfg.min_model_prob and edge_bps >= cfg.min_edge_bps:
-            action = "BUY_YES"
-            side = t1
-        elif (1 - model_prob) >= cfg.min_model_prob and (-edge_bps) >= cfg.min_edge_bps:
-            action = "BUY_NO"
-            side = t1
+    sigs = pd.DataFrame(rows)
+    adapter = odds_adapter or ProxyOddsAdapter()
+    odds = adapter.fetch_probabilities(sigs)
 
-        rows.append(
-            {
-                **fx.to_dict(),
-                "team1_elo": r1,
-                "team2_elo": r2,
-                "model_prob_team1": model_prob,
-                "proxy_market_prob_team1": proxy_market_prob,
-                "edge_bps": edge_bps,
-                "action": action,
-                "market_side": side,
-            }
-        )
-    return pd.DataFrame(rows)
+    sigs = sigs.merge(odds, on="event_id", how="left")
+    sigs["market_prob_team1"] = sigs["market_prob_team1"].fillna(0.5)
+    sigs["proxy_market_prob_team1"] = sigs["market_prob_team1"]
+
+    sigs["edge_bps"] = (sigs["model_prob_team1"] - sigs["market_prob_team1"]) * 10000
+
+    sigs["action"] = "HOLD"
+    sigs["market_side"] = None
+
+    yes_mask = (sigs["model_prob_team1"] >= cfg.min_model_prob) & (sigs["edge_bps"] >= cfg.min_edge_bps)
+    no_mask = ((1 - sigs["model_prob_team1"]) >= cfg.min_model_prob) & ((-sigs["edge_bps"]) >= cfg.min_edge_bps)
+
+    sigs.loc[yes_mask, "action"] = "BUY_YES"
+    sigs.loc[yes_mask, "market_side"] = sigs.loc[yes_mask, "team1"]
+    sigs.loc[no_mask, "action"] = "BUY_NO"
+    sigs.loc[no_mask, "market_side"] = sigs.loc[no_mask, "team1"]
+
+    return sigs

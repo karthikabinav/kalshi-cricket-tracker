@@ -27,3 +27,17 @@ runtime:
   base_currency: "USD"
   artifact_dir: "artifacts"
   timezone: "UTC"
+
+odds:
+  provider: "proxy" # proxy | provider_stub | csv
+  proxy_shrinkage: 0.65
+  csv_path: null
+  provider_stub_name: "provider_stub"
+
+trading:
+  mode: "paper" # paper | live
+  enable_live_trading: false
+  live_confirmation_phrase: ""
+  kalshi_api_base_url: "https://api.elections.kalshi.com/trade-api/v2"
+  kalshi_api_key_env: "KALSHI_API_KEY"
+  kalshi_api_secret_env: "KALSHI_API_SECRET"

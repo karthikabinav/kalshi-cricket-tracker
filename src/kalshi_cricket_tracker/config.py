@@ -42,12 +42,31 @@ class RuntimeConfig(BaseModel):
     timezone: str = "UTC"
 
 
+class OddsConfig(BaseModel):
+    provider: Literal["proxy", "provider_stub", "csv"] = "proxy"
+    proxy_shrinkage: float = 0.65
+    csv_path: str | None = None
+    provider_stub_name: str = "provider_stub"
+
+
+class TradingConfig(BaseModel):
+    mode: Literal["paper", "live"] = "paper"
+    enable_live_trading: bool = False
+    live_confirmation_phrase: str = ""
+
+    kalshi_api_base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
+    kalshi_api_key_env: str = "KALSHI_API_KEY"
+    kalshi_api_secret_env: str = "KALSHI_API_SECRET"
+
+
 class AppConfig(BaseModel):
     data: DataConfig = DataConfig()
     strategy: StrategyConfig = StrategyConfig()
     features: FeatureConfig = FeatureConfig()
     bandit: BanditConfig = BanditConfig()
     runtime: RuntimeConfig = RuntimeConfig()
+    odds: OddsConfig = OddsConfig()
+    trading: TradingConfig = TradingConfig()
 
 
 

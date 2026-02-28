@@ -7,6 +7,7 @@ import pandas as pd
 from kalshi_cricket_tracker.config import AppConfig
 from kalshi_cricket_tracker.data.ingest import CricSheetIngestor, FixtureIngestor
 from kalshi_cricket_tracker.features.engineering import add_recent_form, build_team_ratings
+from kalshi_cricket_tracker.odds import create_odds_adapter
 from kalshi_cricket_tracker.strategy.risk import apply_risk
 from kalshi_cricket_tracker.strategy.signals import generate_signals
 
@@ -21,7 +22,14 @@ def ingest_and_engineer(cfg: AppConfig) -> tuple[pd.DataFrame, pd.DataFrame, dic
     rated_matches["proxy_market_prob_team1"] = 0.5 + (rated_matches["team1_win_prob_pre"] - 0.5) * 0.65
 
     fixtures = FixtureIngestor(cfg.data.fixtures_url).fetch(limit=25)
-    sigs = generate_signals(fixtures, ratings, cfg.strategy, home_advantage_elo=cfg.features.home_advantage_elo)
+    odds_adapter = create_odds_adapter(cfg.odds)
+    sigs = generate_signals(
+        fixtures,
+        ratings,
+        cfg.strategy,
+        home_advantage_elo=cfg.features.home_advantage_elo,
+        odds_adapter=odds_adapter,
+    )
     sigs = apply_risk(sigs, cfg.strategy)
 
     return matches, rated_matches, ratings, sigs

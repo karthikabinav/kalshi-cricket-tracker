@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pandas as pd
+import requests
+
+from kalshi_cricket_tracker.config import TradingConfig
 
 
 @dataclass
@@ -52,3 +56,53 @@ class MockKalshiPaperClient(KalshiClientInterface):
             )
             fills.append(self.place_order(order))
         return pd.DataFrame(fills)
+
+
+class KalshiRestClient(KalshiClientInterface):
+    """Optional live REST client scaffold.
+
+    This client is intentionally minimal and only enabled via explicit live-mode config.
+    """
+
+    def __init__(self, base_url: str, api_key: str, api_secret: str, timeout_s: int = 20):
+        self.base_url = base_url.rstrip("/")
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+                "X-Kalshi-API-Secret": api_secret,
+                "Content-Type": "application/json",
+            }
+        )
+        self.timeout_s = timeout_s
+
+    @classmethod
+    def from_env(cls, cfg: TradingConfig) -> "KalshiRestClient":
+        api_key = os.getenv(cfg.kalshi_api_key_env)
+        api_secret = os.getenv(cfg.kalshi_api_secret_env)
+        if not api_key or not api_secret:
+            raise RuntimeError(
+                "Kalshi credentials are missing in environment. "
+                f"Set {cfg.kalshi_api_key_env} and {cfg.kalshi_api_secret_env}."
+            )
+        return cls(base_url=cfg.kalshi_api_base_url, api_key=api_key, api_secret=api_secret)
+
+    def get_market(self, event_ticker: str) -> dict:
+        url = f"{self.base_url}/markets/{event_ticker}"
+        r = self.session.get(url, timeout=self.timeout_s)
+        r.raise_for_status()
+        return r.json()
+
+    def place_order(self, order: KalshiOrder) -> dict:
+        url = f"{self.base_url}/portfolio/orders"
+        payload = {
+            "ticker": order.event_ticker,
+            "side": order.side,
+            "count": 1,
+            "client_order_id": f"kct-{int(datetime.now(timezone.utc).timestamp())}",
+            "type": "limit",
+            "yes_price": int(round(order.limit_price * 100)),
+        }
+        r = self.session.post(url, json=payload, timeout=self.timeout_s)
+        r.raise_for_status()
+        return r.json()

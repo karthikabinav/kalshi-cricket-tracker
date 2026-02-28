@@ -10,7 +10,8 @@ from rich import print
 from kalshi_cricket_tracker.api.pipeline import ensure_artifacts_dir, ingest_and_engineer
 from kalshi_cricket_tracker.backtest.engine import run_backtest
 from kalshi_cricket_tracker.config import load_config
-from kalshi_cricket_tracker.execution.kalshi import MockKalshiPaperClient
+from kalshi_cricket_tracker.execution.guards import validate_trading_mode
+from kalshi_cricket_tracker.execution.kalshi import KalshiOrder, KalshiRestClient, MockKalshiPaperClient
 from kalshi_cricket_tracker.strategy.contextual_bandit import run_bandit_backtest
 from kalshi_cricket_tracker.strategy.risk import apply_risk
 
@@ -26,8 +27,29 @@ def run_daily(config: str = "configs/default.yaml"):
     signals.to_csv(art / "daily_signals.csv", index=False)
     rated_matches.to_csv(art / "rated_matches.csv", index=False)
 
-    fills = MockKalshiPaperClient().execute_from_signals(signals)
-    fills.to_csv(art / "paper_fills.csv", index=False)
+    validate_trading_mode(cfg.trading)
+    if cfg.trading.mode == "live":
+        client = KalshiRestClient.from_env(cfg.trading)
+        fills = []
+        for _, row in signals.iterrows():
+            if not row.get("allowed") or row.get("action") == "HOLD":
+                continue
+            fills.append(
+                client.place_order(
+                    KalshiOrder(
+                        event_ticker=f"CRICKET-{row.get('event_id', 'NA')}",
+                        side=row["action"],
+                        stake_usd=float(row["stake_usd"]),
+                        limit_price=float(row["proxy_market_prob_team1"]),
+                    )
+                )
+            )
+        fills = pd.DataFrame(fills)
+        fills.to_csv(art / "live_order_responses.csv", index=False)
+    else:
+        fills = MockKalshiPaperClient().execute_from_signals(signals)
+        fills.to_csv(art / "paper_fills.csv", index=False)
+
     print(f"[green]Saved daily outputs in {art}[/green]")
 
 
