@@ -13,6 +13,14 @@ from kalshi_cricket_tracker.config import load_config
 from kalshi_cricket_tracker.execution.guards import validate_trading_mode
 from kalshi_cricket_tracker.execution.kalshi import KalshiOrder, KalshiRestClient, MockKalshiPaperClient
 from kalshi_cricket_tracker.strategy.contextual_bandit import run_bandit_backtest
+from kalshi_cricket_tracker.strategy.copula_sim import (
+    equicorr_matrix,
+    joint_tail_metrics,
+    simulate_clayton_outcomes,
+    simulate_gaussian_outcomes,
+    simulate_independent_outcomes,
+    simulate_t_outcomes,
+)
 from kalshi_cricket_tracker.strategy.risk import apply_risk
 
 app = typer.Typer(help="Kalshi Cricket Tracker CLI")
@@ -92,6 +100,42 @@ def bandit_backtest(config: str = "configs/default.yaml"):
     out.to_csv(art / "bandit_backtest.csv", index=False)
     (art / "bandit_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(metrics)
+
+
+@app.command("copula-stress")
+def copula_stress(
+    probs: str = typer.Option("0.52,0.53,0.51,0.48,0.50", help="Comma-separated marginal probabilities"),
+    rho: float = typer.Option(0.5, help="Equicorrelation for Gaussian/t copulas"),
+    nu: float = typer.Option(4.0, help="Degrees of freedom for t-copula"),
+    theta: float = typer.Option(2.0, help="Clayton copula theta"),
+    n_paths: int = typer.Option(200000, help="Simulation paths"),
+    seed: int = typer.Option(42, help="Random seed"),
+):
+    p = [float(x.strip()) for x in probs.split(",") if x.strip()]
+    d = len(p)
+    corr = equicorr_matrix(d, rho)
+
+    indep = joint_tail_metrics(simulate_independent_outcomes(p, n=n_paths, seed=seed))
+    gauss = joint_tail_metrics(simulate_gaussian_outcomes(p, corr=corr, n=n_paths, seed=seed + 1))
+    tc = joint_tail_metrics(simulate_t_outcomes(p, corr=corr, nu=nu, n=n_paths, seed=seed + 2))
+    clay = joint_tail_metrics(simulate_clayton_outcomes(p, theta=theta, n=n_paths, seed=seed + 3))
+
+    def ratio(a: float, b: float) -> float:
+        return float("inf") if b == 0 else a / b
+
+    out = {
+        "settings": {"probs": p, "rho": rho, "nu": nu, "theta": theta, "n_paths": n_paths},
+        "independent": indep,
+        "gaussian": gauss,
+        "t_copula": tc,
+        "clayton": clay,
+        "tail_multipliers_vs_gaussian": {
+            "all_win_t_over_gaussian": ratio(tc["p_all_win"], gauss["p_all_win"]),
+            "all_lose_t_over_gaussian": ratio(tc["p_all_lose"], gauss["p_all_lose"]),
+            "all_lose_clayton_over_gaussian": ratio(clay["p_all_lose"], gauss["p_all_lose"]),
+        },
+    }
+    print(json.dumps(out, indent=2))
 
 
 @app.command()
