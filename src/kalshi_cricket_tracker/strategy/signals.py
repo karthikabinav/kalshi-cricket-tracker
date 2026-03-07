@@ -17,18 +17,37 @@ def generate_signals(
     for idx, fx in fixtures.iterrows():
         t1, t2 = fx["team1"], fx["team2"]
         r1, r2 = ratings.get(t1, 1500.0), ratings.get(t2, 1500.0)
-        model_prob = 1.0 / (1.0 + 10 ** ((r2 - (r1 + home_advantage_elo)) / 400))
+        elo_prob = 1.0 / (1.0 + 10 ** ((r2 - (r1 + home_advantage_elo)) / 400))
+        external_prob = fx.get("external_prob_team1")
+        use_external = external_prob is not None and pd.notna(external_prob)
+        model_prob = float(external_prob) if use_external else float(elo_prob)
 
         rec = {
             **fx.to_dict(),
             "event_id": fx.get("event_id") or f"fixture-{idx}",
             "team1_elo": r1,
             "team2_elo": r2,
+            "elo_prob_team1": float(elo_prob),
+            "external_prob_team1": float(external_prob) if use_external else None,
+            "model_prob_source": "external" if use_external else "elo",
             "model_prob_team1": model_prob,
         }
         rows.append(rec)
 
-    base_cols = ["date", "team1", "team2", "venue", "competition", "event_id", "team1_elo", "team2_elo", "model_prob_team1"]
+    base_cols = [
+        "date",
+        "team1",
+        "team2",
+        "venue",
+        "competition",
+        "event_id",
+        "team1_elo",
+        "team2_elo",
+        "elo_prob_team1",
+        "external_prob_team1",
+        "model_prob_source",
+        "model_prob_team1",
+    ]
     sigs = pd.DataFrame(rows, columns=base_cols)
     if sigs.empty:
         sigs["market_prob_team1"] = pd.Series(dtype=float)

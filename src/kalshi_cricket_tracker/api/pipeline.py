@@ -10,6 +10,7 @@ from kalshi_cricket_tracker.features.engineering import add_recent_form, build_t
 from kalshi_cricket_tracker.odds import create_odds_adapter
 from kalshi_cricket_tracker.strategy.risk import apply_risk
 from kalshi_cricket_tracker.strategy.signals import generate_signals
+from kalshi_cricket_tracker.winprob import create_winprob_adapter
 
 
 def ingest_and_engineer(cfg: AppConfig) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float], pd.DataFrame]:
@@ -24,6 +25,12 @@ def ingest_and_engineer(cfg: AppConfig) -> tuple[pd.DataFrame, pd.DataFrame, dic
     )
 
     fixtures = FixtureIngestor(cfg.data.fixtures_url).fetch(limit=25)
+
+    winprob_adapter = create_winprob_adapter(cfg.winprob)
+    external_probs = winprob_adapter.fetch_probabilities(fixtures)
+    if not external_probs.empty:
+        fixtures = fixtures.merge(external_probs[["event_id", "external_prob_team1"]], on="event_id", how="left")
+
     odds_adapter = create_odds_adapter(cfg.odds)
     sigs = generate_signals(
         fixtures,

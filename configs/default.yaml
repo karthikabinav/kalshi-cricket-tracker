@@ -17,6 +17,13 @@ strategy:
   fee_bps: 10.0
   kelly_fraction: 0.25
 
+live_arb:
+  entry_edge_bps: 250.0
+  exit_edge_bps: 40.0
+  take_profit_bps: 120.0
+  stop_loss_bps: 150.0
+  max_holding_minutes: 180
+
 bandit:
   alpha: 1.5
   risk_lambda: 0.15
@@ -34,6 +41,14 @@ odds:
   proxy_shrinkage: 0.65
   csv_path: null
   provider_stub_name: "provider_stub"
+
+winprob:
+  provider: "elo_only" # elo_only | csv | cricinfo
+  csv_path: null
+  # Example template (requires event_id mapping):
+  # "https://hs-consumer-api.espncricinfo.com/v1/pages/match/details?lang=en&matchId={event_id}&latest=true"
+  cricinfo_endpoint_template: null
+  cricinfo_timeout_s: 12
 
 trading:
   mode: "paper" # paper | live

@@ -22,6 +22,7 @@ from kalshi_cricket_tracker.strategy.copula_sim import (
     simulate_t_outcomes,
 )
 from kalshi_cricket_tracker.strategy.risk import apply_risk
+from kalshi_cricket_tracker.strategy.live_arb import ArbConfig, backtest_from_snapshots
 
 app = typer.Typer(help="Kalshi Cricket Tracker CLI")
 
@@ -136,6 +137,28 @@ def copula_stress(
         },
     }
     print(json.dumps(out, indent=2))
+
+
+@app.command("arb-backtest")
+def arb_backtest(
+    snapshots_csv: str = typer.Option(..., help="CSV with ts,event_id,model_prob_team1,market_prob_team1"),
+    config: str = "configs/default.yaml",
+    stake_usd: float = typer.Option(100.0, help="Per-position notional in USD"),
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    snaps = pd.read_csv(snapshots_csv)
+    arb_cfg = ArbConfig(
+        entry_edge_bps=cfg.live_arb.entry_edge_bps,
+        exit_edge_bps=cfg.live_arb.exit_edge_bps,
+        take_profit_bps=cfg.live_arb.take_profit_bps,
+        stop_loss_bps=cfg.live_arb.stop_loss_bps,
+        max_holding_minutes=cfg.live_arb.max_holding_minutes,
+    )
+    trades, metrics = backtest_from_snapshots(snaps, arb_cfg, stake_usd=stake_usd)
+    trades.to_csv(art / "arb_backtest_trades.csv", index=False)
+    (art / "arb_backtest_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(metrics)
 
 
 @app.command()

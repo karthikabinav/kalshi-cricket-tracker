@@ -31,6 +31,7 @@ sudo apt-get update && sudo apt-get install -y python3-venv python3-pip
 kct run-daily --config configs/default.yaml
 kct backtest --config configs/default.yaml
 kct bandit-backtest --config configs/default.yaml
+kct arb-backtest --snapshots-csv docs/sample_arb_snapshots.csv --config configs/default.yaml
 streamlit run scripts/dashboard.py -- --config configs/default.yaml
 ```
 
@@ -49,6 +50,7 @@ Or run end-to-end:
 - `kct run-daily`: ingest + features + daily signals + paper fills (or live if explicitly enabled)
 - `kct backtest`: rule-based backtest
 - `kct bandit-backtest`: contextual bandit backtest
+- `kct arb-backtest`: snapshot-based under/over-calibration trading backtest with open/close logic
 - `kct dashboard`: prints launch command
 
 ## Odds adapters
@@ -56,6 +58,14 @@ Configured under `odds:` in YAML:
 - `provider: proxy` (default) uses model-probability shrinkage
 - `provider: csv` reads `event_id,market_prob_team1` from a local CSV
 - `provider: provider_stub` placeholder for a future real API provider
+
+## Reference win-prob adapters (model side)
+Configured under `winprob:` in YAML:
+- `provider: elo_only` (default) uses Elo-derived probability
+- `provider: csv` reads `event_id,external_prob_team1` from a local CSV
+- `provider: cricinfo` best-effort JSON parser using `cricinfo_endpoint_template` (format with `{event_id}`)
+
+If `external_prob_team1` is available for a fixture, signals use it as `model_prob_team1` and set `model_prob_source=external`.
 
 ## Live trading safety defaults
 Default config is **safe/paper**:

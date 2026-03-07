@@ -23,6 +23,14 @@ class StrategyConfig(BaseModel):
     kelly_fraction: float = 0.25
 
 
+class LiveArbConfig(BaseModel):
+    entry_edge_bps: float = 250.0
+    exit_edge_bps: float = 40.0
+    take_profit_bps: float = 120.0
+    stop_loss_bps: float = 150.0
+    max_holding_minutes: int = 180
+
+
 class FeatureConfig(BaseModel):
     elo_k: float = 20.0
     home_advantage_elo: float = 25.0
@@ -50,6 +58,15 @@ class OddsConfig(BaseModel):
     provider_stub_name: str = "provider_stub"
 
 
+class WinProbConfig(BaseModel):
+    provider: Literal["elo_only", "csv", "cricinfo"] = "elo_only"
+    csv_path: str | None = None
+    # Format with {event_id}; example:
+    # https://hs-consumer-api.espncricinfo.com/v1/pages/match/details?lang=en&matchId={event_id}&latest=true
+    cricinfo_endpoint_template: str | None = None
+    cricinfo_timeout_s: int = 12
+
+
 class TradingConfig(BaseModel):
     mode: Literal["paper", "live"] = "paper"
     enable_live_trading: bool = False
@@ -63,10 +80,12 @@ class TradingConfig(BaseModel):
 class AppConfig(BaseModel):
     data: DataConfig = DataConfig()
     strategy: StrategyConfig = StrategyConfig()
+    live_arb: LiveArbConfig = LiveArbConfig()
     features: FeatureConfig = FeatureConfig()
     bandit: BanditConfig = BanditConfig()
     runtime: RuntimeConfig = RuntimeConfig()
     odds: OddsConfig = OddsConfig()
+    winprob: WinProbConfig = WinProbConfig()
     trading: TradingConfig = TradingConfig()
 
 
