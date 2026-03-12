@@ -1,0 +1,27 @@
+# Quant Simulation Upgrade Notes
+
+- Add confidence intervals (p, stderr, 95% CI) to predictions.
+- Add CI-based trade gate (skip low-confidence edges).
+- Add path-level pre-resolution scenario simulation.
+- Add correlated-market exposure caps.
+- Add execution-cost-aware stress backtests.
+- Add Brier score tracking for probability calibration over time.
+- Add confidence quality gates tied to calibration history.
+- Add importance-sampling path for rare-event contracts.
+- Report IS standard error + variance reduction vs crude MC.
+- Add Brier score tracking for probability calibration over time.
+- Add confidence quality gates tied to calibration history.
+- Add importance-sampling path for rare-event contracts.
+- Report IS standard error + variance reduction vs crude MC.
+- Add online probability filtering via particle filter (logit random walk + noisy observation model).
+- Use ESS-triggered resampling and track ESS as health metric.
+- Expose posterior mean + interval for decision gating.
+- Add rolling calibration metrics on filtered probabilities.
+- Implement systematic-resampling particle filter for online probability updates.
+- Add posterior credible intervals and CI-based decision gates.
+- Add variance-reduction options: antithetic, control variate, stratified sampling.
+- Report variance-reduction factor vs crude Monte Carlo per simulation batch.
+- Implement stacked variance-reduction engine: stratified + antithetic + control variate.
+- Add copula-based joint outcome simulator (independent/Gaussian/Student-t/Clayton/Gumbel).
+- Add joint-tail risk metrics for correlated contract clusters.
+- Feed copula stress outputs into exposure caps and bet sizing.

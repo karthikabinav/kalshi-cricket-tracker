@@ -1,0 +1,2 @@
+[console_scripts]
+kct = kalshi_cricket_tracker.cli:app
