@@ -1,0 +1,16 @@
+{
+  "ticker": "KXBTCD-15M-TEST",
+  "rules": "Resolves to YES if BTC settles above threshold at close.",
+  "status": "open",
+  "close_time": "2026-03-01T00:08:00Z",
+  "yes_ask_cents": 58,
+  "yes_bid_cents": 57,
+  "no_ask_cents": 43,
+  "no_bid_cents": 42,
+  "best_yes_ask_size": 50,
+  "best_yes_bid_size": 60,
+  "best_no_ask_size": 55,
+  "best_no_bid_size": 65,
+  "orderbook_stability_bps": 20,
+  "thesis_price_cents": 63
+}

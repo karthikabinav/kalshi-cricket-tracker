@@ -10,6 +10,7 @@ from rich import print
 from kalshi_cricket_tracker.api.pipeline import ensure_artifacts_dir, ingest_and_engineer
 from kalshi_cricket_tracker.backtest.engine import run_backtest
 from kalshi_cricket_tracker.config import load_config
+from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, load_risk_state, load_snapshot
 from kalshi_cricket_tracker.execution.guards import validate_trading_mode
 from kalshi_cricket_tracker.execution.kalshi import KalshiOrder, KalshiRestClient, MockKalshiPaperClient
 from kalshi_cricket_tracker.strategy.contextual_bandit import run_bandit_backtest
@@ -159,6 +160,25 @@ def arb_backtest(
     trades.to_csv(art / "arb_backtest_trades.csv", index=False)
     (art / "arb_backtest_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(metrics)
+
+
+@app.command("btc15m-exec")
+def btc15m_exec(
+    snapshot_json: str = typer.Option(..., help="Path to a BTC 15m market snapshot JSON file"),
+    risk_json: str | None = typer.Option(None, help="Optional path to risk state JSON"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    snapshot = load_snapshot(snapshot_json)
+    risk = load_risk_state(risk_json)
+    agent = BTC15mExecutionAgent(cfg.btc15m)
+    decision = agent.evaluate(snapshot, risk)
+
+    validate_trading_mode(cfg.trading)
+    client = KalshiRestClient.from_env(cfg.trading) if cfg.trading.mode == "live" else MockKalshiPaperClient()
+    agent.execute_candidate(decision, client=client, log_dir=art, live_enabled=cfg.trading.mode == "live")
+    print(decision.render())
 
 
 @app.command()

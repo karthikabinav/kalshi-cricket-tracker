@@ -1,6 +1,6 @@
 # kalshi-cricket-tracker
 
-MVP research assistant for cricket-driven Kalshi market exploration (**paper mode by default**).
+MVP research assistant for cricket-driven Kalshi market exploration (**paper mode by default**), plus a separate **BTC 15-minute execution agent** that is disabled by default and only trades when all configured safety checks pass.
 
 ## Scope
 - Public data ingest (Cricsheet historical + ESPN fixtures best-effort)
@@ -32,6 +32,7 @@ kct run-daily --config configs/default.yaml
 kct backtest --config configs/default.yaml
 kct bandit-backtest --config configs/default.yaml
 kct arb-backtest --snapshots-csv docs/sample_arb_snapshots.csv --config configs/default.yaml
+kct btc15m-exec --snapshot-json docs/btc15m_snapshot.example.json --config configs/default.yaml
 streamlit run scripts/dashboard.py -- --config configs/default.yaml
 ```
 
@@ -51,6 +52,7 @@ Or run end-to-end:
 - `kct backtest`: rule-based backtest
 - `kct bandit-backtest`: contextual bandit backtest
 - `kct arb-backtest`: snapshot-based under/over-calibration trading backtest with open/close logic
+- `kct btc15m-exec`: evaluate a single BTC 15m market snapshot, log the candidate decision, and optionally send a live limit order only when global live-trading guards are explicitly enabled
 - `kct dashboard`: prints launch command
 
 ## Odds adapters
@@ -72,6 +74,7 @@ Default config is **safe/paper**:
 - `trading.mode: paper`
 - `trading.enable_live_trading: false`
 - `trading.live_confirmation_phrase: ""`
+- `btc15m.enabled: false`
 
 Live mode is blocked unless all of these are set:
 1. `trading.mode: live`
@@ -80,8 +83,48 @@ Live mode is blocked unless all of these are set:
 4. Environment variables with credentials:
    - `KALSHI_API_KEY`
    - `KALSHI_API_SECRET`
+5. Explicit BTC agent opt-in in config:
+   - `btc15m.enabled: true`
 
-If any guard fails, `run-daily` aborts before placing orders.
+If any guard fails, `run-daily` / `btc15m-exec` abort before placing live orders.
+
+## BTC 15m execution agent
+The BTC 15m agent is intentionally narrow:
+- Only accepts tickers that look like BTC 15-minute markets
+- Defaults to **NO TRADE** unless all required rule, timing, liquidity, spread, stability, edge, confidence, and risk checks pass
+- Uses **limit orders only**
+- Caps notional at `$100` per trade and one open directional BTC position by default
+- Logs every candidate decision to `artifacts/btc15m_candidate_decisions.jsonl`
+- Logs every submitted/paper trade to `artifacts/btc15m_executed_trades.jsonl`
+
+### Snapshot input
+`btc15m-exec` currently expects a JSON snapshot with the fields used by the decision engine. Example:
+
+```json
+{
+  "ticker": "KXBTCD-15M-TEST",
+  "rules": "Resolves to YES if BTC settles above threshold at close.",
+  "status": "open",
+  "close_time": "2026-03-01T00:08:00Z",
+  "yes_ask_cents": 58,
+  "yes_bid_cents": 57,
+  "no_ask_cents": 43,
+  "no_bid_cents": 42,
+  "best_yes_ask_size": 50,
+  "best_yes_bid_size": 60,
+  "best_no_ask_size": 55,
+  "best_no_bid_size": 65,
+  "orderbook_stability_bps": 20,
+  "thesis_price_cents": 63
+}
+```
+
+The user should place Kalshi credentials in environment variables only. Recommended workflow:
+```bash
+cp .env.kalshi.example .env.kalshi
+# edit the values, then source it into the shell
+set -a && source .env.kalshi && set +a
+```
 
 ## Files
 - `src/kalshi_cricket_tracker/strategy/contextual_bandit.py` reusable bandit strategy module

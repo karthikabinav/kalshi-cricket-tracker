@@ -22,12 +22,20 @@ class KalshiClientInterface:
     def place_order(self, order: KalshiOrder) -> dict:
         raise NotImplementedError
 
+    def get_market(self, event_ticker: str) -> dict:
+        raise NotImplementedError
+
+    def get_orderbook(self, event_ticker: str) -> dict:
+        raise NotImplementedError
+
 
 class MockKalshiPaperClient(KalshiClientInterface):
     """Paper-only executor. No live orders."""
 
-    def __init__(self):
+    def __init__(self, market_map: dict[str, dict] | None = None, orderbook_map: dict[str, dict] | None = None):
         self.orders: list[dict] = []
+        self.market_map = market_map or {}
+        self.orderbook_map = orderbook_map or {}
 
     def place_order(self, order: KalshiOrder) -> dict:
         rec = {
@@ -36,10 +44,17 @@ class MockKalshiPaperClient(KalshiClientInterface):
             "side": order.side,
             "stake_usd": order.stake_usd,
             "limit_price": order.limit_price,
+            "count": 1,
             "status": "PAPER_FILLED",
         }
         self.orders.append(rec)
         return rec
+
+    def get_market(self, event_ticker: str) -> dict:
+        return self.market_map.get(event_ticker, {})
+
+    def get_orderbook(self, event_ticker: str) -> dict:
+        return self.orderbook_map.get(event_ticker, {})
 
     def execute_from_signals(self, signals: pd.DataFrame) -> pd.DataFrame:
         fills = []
@@ -89,6 +104,12 @@ class KalshiRestClient(KalshiClientInterface):
 
     def get_market(self, event_ticker: str) -> dict:
         url = f"{self.base_url}/markets/{event_ticker}"
+        r = self.session.get(url, timeout=self.timeout_s)
+        r.raise_for_status()
+        return r.json()
+
+    def get_orderbook(self, event_ticker: str) -> dict:
+        url = f"{self.base_url}/markets/{event_ticker}/orderbook"
         r = self.session.get(url, timeout=self.timeout_s)
         r.raise_for_status()
         return r.json()

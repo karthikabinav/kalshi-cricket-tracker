@@ -77,6 +77,28 @@ class TradingConfig(BaseModel):
     kalshi_api_secret_env: str = "KALSHI_API_SECRET"
 
 
+class BTC15mExecConfig(BaseModel):
+    enabled: bool = False
+    min_time_to_close_min: float = 4.0
+    max_time_to_close_min: float = 12.0
+    min_depth_contracts: int = 25
+    max_spread_cents: int = 2
+    max_orderbook_instability_bps: float = 60.0
+    min_edge_cents: int = 4
+    exit_edge_cents: int = 1
+    min_reward_cents: int = 2
+    target_take_profit_cents: int = 4
+    min_confidence: int = 65
+    max_dollars_per_trade: float = 100.0
+    max_simultaneous_positions: int = 1
+    max_daily_loss_usd: float = 150.0
+    max_consecutive_losses: int = 3
+    max_trades_per_hour: int = 4
+    max_bad_slippage_cents: int = 2
+    candidate_log_jsonl: str = "btc15m_candidate_decisions.jsonl"
+    executed_log_jsonl: str = "btc15m_executed_trades.jsonl"
+
+
 class AppConfig(BaseModel):
     data: DataConfig = DataConfig()
     strategy: StrategyConfig = StrategyConfig()
@@ -87,6 +109,7 @@ class AppConfig(BaseModel):
     odds: OddsConfig = OddsConfig()
     winprob: WinProbConfig = WinProbConfig()
     trading: TradingConfig = TradingConfig()
+    btc15m: BTC15mExecConfig = BTC15mExecConfig()
 
 
 
