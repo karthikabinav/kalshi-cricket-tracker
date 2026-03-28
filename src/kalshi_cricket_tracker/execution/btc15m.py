@@ -8,7 +8,6 @@ from typing import Any, Literal
 
 from kalshi_cricket_tracker.config import BTC15mExecConfig
 from kalshi_cricket_tracker.execution.kalshi import KalshiClientInterface, KalshiOrder
-from kalshi_cricket_tracker.strategy.btc15m_vol_bwk import BwKActionEvaluation, FeeSchedule, Position, VolBanditsWithKnapsackPolicy, VolSnapshot
 
 
 @dataclass
@@ -133,8 +132,6 @@ class RiskState:
     last_ticker: str | None = None
     updated_at: str | None = None
 
-    def position(self) -> Position:
-        return Position(state=self.inventory_state, qty=self.inventory_qty, entry_cents=self.entry_price_cents)
 
 
 @dataclass
@@ -196,9 +193,6 @@ class CandidateDecision:
 class BTC15mExecutionAgent:
     def __init__(self, cfg: BTC15mExecConfig):
         self.cfg = cfg
-        self.bwk_policy = VolBanditsWithKnapsackPolicy(
-            FeeSchedule(maker_fee_bps=cfg.maker_fee_bps, taker_fee_bps=cfg.taker_fee_bps)
-        )
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
@@ -308,129 +302,108 @@ class BTC15mExecutionAgent:
             recommended_action=action,
         )
 
-    def _to_vol_snapshot(self, snapshot: BTC15mMarketSnapshot) -> VolSnapshot:
-        contract_mid = snapshot.contract_price_cents
-        thesis = snapshot.thesis_price_cents if snapshot.thesis_price_cents is not None else int(round(contract_mid))
-        mean_reversion_z = snapshot.local_mean_reversion_zscore
-        if mean_reversion_z is None and snapshot.distance_from_target_cents is not None:
-            mean_reversion_z = self._clamp(-snapshot.distance_from_target_cents / max(snapshot.spread_cents, 1), -3.0, 3.0)
-        return VolSnapshot(
-            yes_bid_cents=snapshot.yes_bid_cents,
-            yes_ask_cents=snapshot.yes_ask_cents,
-            no_bid_cents=snapshot.no_bid_cents,
-            no_ask_cents=snapshot.no_ask_cents,
-            spread_cents=snapshot.spread_cents,
-            depth_contracts=snapshot.min_depth,
-            time_remaining_min=max(0.0, snapshot.time_remaining.total_seconds() / 60.0),
-            distance_from_target_cents=float(thesis - contract_mid),
-            microprice_cents=snapshot.microprice_cents,
-            orderbook_imbalance=snapshot.orderbook_imbalance,
-            recent_trade_buy_ratio=snapshot.recent_trade_buy_ratio,
-            realized_vol_bps=snapshot.realized_vol_bps,
-            local_mean_reversion_zscore=mean_reversion_z,
-        )
-
     def _capital_remaining(self, risk: RiskState) -> float:
         return max(0.0, risk.current_capital_usd - risk.reserved_capital_usd)
 
-    def _evaluate_vol_bwk(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
-        position = risk.position()
-        vol_snapshot = self._to_vol_snapshot(snapshot)
+    def _manual_paper_enabled(self) -> bool:
+        return bool(self.cfg.manual_paper_enabled or self.cfg.vol_bwk_enabled)
 
-        # Manual-policy state machine:
-        # - flat: enter near 60c with ~$100 principal
-        # - in position: hold until +10% profit target or forced time exit at 3m
-        if position.state == "FLAT":
-            candidates = []
-            if snapshot.yes_ask_cents <= self.cfg.band_entry_cents:
-                candidates.append((abs(self.cfg.band_entry_cents - snapshot.yes_ask_cents), "buy_yes_8", snapshot.yes_ask_cents))
-            if snapshot.no_ask_cents <= self.cfg.band_entry_cents:
-                candidates.append((abs(self.cfg.band_entry_cents - snapshot.no_ask_cents), "buy_no_8", snapshot.no_ask_cents))
+    def _evaluate_manual_paper_state_machine(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
+        mins_left = max(0.0, snapshot.time_remaining.total_seconds() / 60.0)
+        entry_fee_rate = 2.0 * self.cfg.fee_bps_per_side / 10000.0
+        inventory_state = risk.inventory_state
+        qty = max(1, risk.inventory_qty) if inventory_state != "FLAT" else max(1, int(self.cfg.max_dollars_per_trade / max(0.01, self.cfg.manual_entry_cents / 100.0)))
+        target_exit_cents = max(self.cfg.manual_entry_cents, int(round(self.cfg.manual_entry_cents + self.cfg.manual_profit_target_usd / max(qty, 1) * 100.0)))
+
+        action = "skip"
+        next_state = inventory_state
+        reward_cents = 0.0
+        cost_cents = 0.0
+        fee_cents = 0.0
+        score_cents = 0.0
+        rationale = f"manual state machine idle: no side offered at or below {self.cfg.manual_entry_cents}c"
+        unrealized_cents = 0.0
+
+        if inventory_state == "FLAT":
+            candidates: list[tuple[int, Literal["YES", "NO"], int]] = []
+            if snapshot.yes_ask_cents <= self.cfg.manual_entry_cents:
+                candidates.append((abs(self.cfg.manual_entry_cents - snapshot.yes_ask_cents), "YES", snapshot.yes_ask_cents))
+            if snapshot.no_ask_cents <= self.cfg.manual_entry_cents:
+                candidates.append((abs(self.cfg.manual_entry_cents - snapshot.no_ask_cents), "NO", snapshot.no_ask_cents))
             if candidates:
-                _, action, entry_cents = sorted(candidates, key=lambda x: x[0])[0]
-                evaluation = self.bwk_policy.evaluate_action(
-                    position=position,
-                    snapshot=vol_snapshot,
-                    action=action,
-                    lambda_cost=self.cfg.bwk_lambda_cost,
-                    expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
-                )
-            else:
-                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"no entry candidate at or below {self.cfg.band_entry_cents}c")
+                _, chosen_side, ask_cents = min(candidates, key=lambda item: item[0])
+                fee_cents = ask_cents * entry_fee_rate
+                cost_cents = ask_cents
+                reward_cents = max(0.0, target_exit_cents - ask_cents)
+                score_cents = reward_cents - fee_cents
+                rationale = f"manual entry: buy {chosen_side} at {ask_cents}c near {self.cfg.manual_entry_cents}c with ${qty * ask_cents / 100.0:.2f} paper notional"
+                action = "buy_yes" if chosen_side == "YES" else "buy_no"
+                next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
         else:
-            evaluation = BwKActionEvaluation(action="hold_position", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale="holding until target profit or forced time exit")
+            is_yes = inventory_state == "LONG_YES"
+            mark_bid = snapshot.yes_bid_cents if is_yes else snapshot.no_bid_cents
+            side = "YES" if is_yes else "NO"
+            entry_cents = float(risk.entry_price_cents or 0.0)
+            action = "hold_position"
+            next_state = inventory_state
+            unrealized_cents = mark_bid - entry_cents
+            unrealized_profit_usd = qty * unrealized_cents / 100.0
+            rationale = f"manual hold: waiting for ${self.cfg.manual_profit_target_usd:.2f} paper PnL target or 3-minute forced exit"
+            should_exit_for_profit = unrealized_profit_usd >= self.cfg.manual_profit_target_usd
+            should_exit_for_time = mins_left <= self.cfg.min_time_to_close_min
+            if should_exit_for_profit or should_exit_for_time:
+                fee_cents = mark_bid * entry_fee_rate
+                cost_cents = -mark_bid
+                reward_cents = unrealized_cents - fee_cents
+                score_cents = reward_cents
+                exit_reason = f"net paper PnL ${qty * reward_cents / 100.0:.2f}"
+                rationale = f"manual exit: sell {side} at {mark_bid}c with {exit_reason}"
+                action = "sell_yes" if is_yes else "sell_no"
+                next_state = "FLAT"
 
-        if evaluation.action.startswith("buy_yes"):
-            projected_exit = max(snapshot.yes_bid_cents, self.cfg.band_exit_cents)
-            projected_round_trip = projected_exit - snapshot.yes_ask_cents - (2.0 * self.cfg.fee_bps_per_side * snapshot.yes_ask_cents / 10000.0)
-            if snapshot.yes_ask_cents > self.cfg.band_entry_cents:
-                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: ask {snapshot.yes_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
-            elif projected_round_trip <= 0 or evaluation.lagrangian_score <= 0:
-                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: projected round-trip {projected_round_trip:.2f}c not positive")
-        elif evaluation.action.startswith("buy_no"):
-            projected_exit = max(snapshot.no_bid_cents, self.cfg.band_exit_cents)
-            projected_round_trip = projected_exit - snapshot.no_ask_cents - (2.0 * self.cfg.fee_bps_per_side * snapshot.no_ask_cents / 10000.0)
-            if snapshot.no_ask_cents > self.cfg.band_entry_cents:
-                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: ask {snapshot.no_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
-            elif projected_round_trip <= 0 or evaluation.lagrangian_score <= 0:
-                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: projected round-trip {projected_round_trip:.2f}c not positive")
-        elif evaluation.action == "hold_position" and position.state == "LONG_YES" and snapshot.yes_bid_cents >= self.cfg.band_exit_cents:
-            evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_yes", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
-        elif evaluation.action == "hold_position" and position.state == "LONG_NO" and snapshot.no_bid_cents >= self.cfg.band_exit_cents:
-            evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_no", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
-        size = position.qty or self.bwk_policy.entry_qty
-        unrealized_cents = self.bwk_policy.mark_to_market(position, vol_snapshot)
-        target_profit_usd = self.cfg.max_dollars_per_trade * self.cfg.profit_target_fraction
-        unrealized_profit_usd = (unrealized_cents / 100.0) * max(1, size)
-        if evaluation.action == "hold_position" and unrealized_profit_usd >= target_profit_usd:
-            if position.state == "LONG_YES":
-                evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_yes", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
-            elif position.state == "LONG_NO":
-                evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_no", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
-        gross_edge = evaluation.reward if evaluation.action not in {"hold", "hold_position", "skip"} else unrealized_cents
-        fees = evaluation.fee_load
-        net_ev = evaluation.lagrangian_score
-        if evaluation.action.startswith("buy_yes"):
+        if action == "buy_yes":
             rec_action = "ENTER_LONG_YES"
-            fair_prob = min(0.99, max(0.01, (snapshot.yes_ask_cents + max(evaluation.reward, 0.0)) / 100.0))
-        elif evaluation.action.startswith("buy_no"):
+            fair_prob = min(0.99, max(0.01, target_exit_cents / 100.0))
+        elif action == "buy_no":
             rec_action = "ENTER_LONG_NO"
-            fair_prob = min(0.99, max(0.01, 1.0 - (snapshot.no_ask_cents + max(evaluation.reward, 0.0)) / 100.0))
-        elif evaluation.action in {"sell_yes", "sell_no"}:
+            fair_prob = min(0.99, max(0.01, 1.0 - target_exit_cents / 100.0))
+        elif action in {"sell_yes", "sell_no"}:
             rec_action = "EXIT"
             fair_prob = snapshot.contract_price_cents / 100.0
-        elif evaluation.action == "hold_position":
+        elif action == "hold_position":
             rec_action = "HOLD"
             fair_prob = snapshot.contract_price_cents / 100.0
         else:
             rec_action = "SKIP"
             fair_prob = snapshot.contract_price_cents / 100.0
+
         est = EVEstimate(
             fair_prob=round(fair_prob, 4),
-            tp_hit_prob=0.5,
-            stop_hit_prob=0.25,
+            tp_hit_prob=1.0 if action in {"sell_yes", "sell_no"} else 0.5,
+            stop_hit_prob=1.0 if mins_left <= self.cfg.min_time_to_close_min and inventory_state != "FLAT" else 0.0,
             expected_settlement_value=round(snapshot.contract_price_cents, 3),
-            gross_edge=round(gross_edge, 3),
-            fees=round(fees, 3),
+            gross_edge=round(reward_cents if action not in {"hold_position", "skip"} else unrealized_cents, 3),
+            fees=round(fee_cents, 3),
             slippage=0.0,
-            net_ev=round(net_ev, 3),
-            recommended_size=size,
+            net_ev=round(score_cents if action not in {"hold_position", "skip"} else unrealized_cents, 3),
+            recommended_size=qty,
             recommended_action=rec_action,
         )
         return est, {
-            "bwk_action": evaluation.action,
-            "bwk_reward_cents": evaluation.reward,
-            "bwk_cost_cents": evaluation.cost,
-            "bwk_lagrangian_score": evaluation.lagrangian_score,
-            "bwk_fee_cents": evaluation.fee_load,
-            "bwk_next_state": evaluation.next_state,
-            "bwk_rationale": evaluation.rationale,
+            "manual_action": action,
+            "manual_reward_cents": reward_cents,
+            "manual_cost_cents": cost_cents,
+            "manual_lagrangian_score": score_cents if action not in {"hold_position", "skip"} else unrealized_cents,
+            "manual_fee_cents": fee_cents,
+            "manual_next_state": next_state,
+            "manual_rationale": rationale,
+            "manual_target_exit_cents": target_exit_cents,
             "unrealized_cents": unrealized_cents,
         }
 
     def estimate_trade_ev(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> EVEstimate:
-        if self.cfg.vol_bwk_enabled:
-            est, _ = self._evaluate_vol_bwk(snapshot, risk)
+        if self._manual_paper_enabled():
+            est, _ = self._evaluate_manual_paper_state_machine(snapshot, risk)
             return est
         return self._estimate_standard_ev(snapshot, risk)
 
@@ -491,44 +464,44 @@ class BTC15mExecutionAgent:
             )
 
         blocked_reason = self._check_tradeable(snapshot, risk)
-        bwk_info: dict[str, Any] = {}
+        manual_info: dict[str, Any] = {}
         ev = self.estimate_trade_ev(snapshot, risk)
-        if self.cfg.vol_bwk_enabled:
-            ev, bwk_info = self._evaluate_vol_bwk(snapshot, risk)
+        if self._manual_paper_enabled():
+            ev, manual_info = self._evaluate_manual_paper_state_machine(snapshot, risk)
         action = ev.recommended_action
         dominant_bid = max(snapshot.yes_bid_cents, snapshot.no_bid_cents)
-        if blocked_reason is None and snapshot.current_position_side is None and dominant_bid < self.cfg.dominant_side_min_cents and not self.cfg.vol_bwk_enabled:
+        if blocked_reason is None and snapshot.current_position_side is None and dominant_bid < self.cfg.dominant_side_min_cents and not self._manual_paper_enabled():
             blocked_reason = f"Dominant side bid {dominant_bid}c is below {self.cfg.dominant_side_min_cents}c trigger."
         confidence = int(self._clamp(100.0 * max(0.0, ev.net_ev + self.cfg.safety_buffer_cents) / 8.0, 0.0, 100.0))
         side = "YES" if action == "ENTER_LONG_YES" else "NO" if action == "ENTER_LONG_NO" else "NONE"
         entry = snapshot.yes_ask_cents if side == "YES" else snapshot.no_ask_cents if side == "NO" else None
 
         qty = risk.inventory_qty or ev.recommended_size or 1
-        if self.cfg.vol_bwk_enabled:
-            next_inventory = bwk_info.get("bwk_next_state", risk.inventory_state)
-            entry_basis_cents = snapshot.yes_ask_cents if bwk_info.get("bwk_action", "").startswith("buy_yes") else snapshot.no_ask_cents if bwk_info.get("bwk_action", "").startswith("buy_no") else snapshot.yes_bid_cents if bwk_info.get("bwk_action") == "sell_yes" else snapshot.no_bid_cents if bwk_info.get("bwk_action") == "sell_no" else 100
+        if self._manual_paper_enabled():
+            next_inventory = manual_info.get("manual_next_state", risk.inventory_state)
+            entry_basis_cents = snapshot.yes_ask_cents if manual_info.get("manual_action", "").startswith("buy_yes") else snapshot.no_ask_cents if manual_info.get("manual_action", "").startswith("buy_no") else snapshot.yes_bid_cents if manual_info.get("manual_action") == "sell_yes" else snapshot.no_bid_cents if manual_info.get("manual_action") == "sell_no" else 100
             sized_qty = max(1, int(self.cfg.max_dollars_per_trade / max(0.01, entry_basis_cents / 100.0)))
-            qty = max(qty, sized_qty)
-            resulting_capital = risk.current_capital_usd - max(0.0, qty * (bwk_info.get("bwk_cost_cents") or 0.0) / 100.0)
-            visible_action = bwk_info.get("bwk_action", "skip")
+            qty = risk.inventory_qty or sized_qty
+            resulting_capital = risk.current_capital_usd - qty * (manual_info.get("manual_cost_cents") or 0.0) / 100.0
+            visible_action = manual_info.get("manual_action", "skip")
             if blocked_reason is not None:
                 visible_action = "hold" if snapshot.current_position_side or risk.inventory_state != "FLAT" else "skip"
             extra = {
                 "action": visible_action,
                 "quantity": qty,
-                "reward_cents": bwk_info.get("bwk_reward_cents"),
-                "cost_cents": bwk_info.get("bwk_cost_cents"),
-                "lagrangian_score": bwk_info.get("bwk_lagrangian_score"),
-                "fee_cents": bwk_info.get("bwk_fee_cents"),
+                "reward_cents": manual_info.get("manual_reward_cents"),
+                "cost_cents": manual_info.get("manual_cost_cents"),
+                "lagrangian_score": manual_info.get("manual_lagrangian_score"),
+                "fee_cents": manual_info.get("manual_fee_cents"),
                 "resulting_capital_usd": round(resulting_capital, 4),
                 "realized_round_trip_pnl_usd": round(risk.realized_round_trip_pnl_usd, 4),
-                "unrealized_pnl_usd": round((bwk_info.get("unrealized_cents") or 0.0) / 100.0, 4),
+                "unrealized_pnl_usd": round((manual_info.get("unrealized_cents") or 0.0) / 100.0, 4),
                 "inventory_state_after": next_inventory,
-                **bwk_info,
+                **manual_info,
             }
             if blocked_reason is not None:
-                extra["bwk_action"] = visible_action
-                extra["bwk_next_state"] = risk.inventory_state
+                extra["manual_action"] = visible_action
+                extra["manual_next_state"] = risk.inventory_state
         else:
             extra = {
                 "action": action.lower(),
@@ -560,8 +533,8 @@ class BTC15mExecutionAgent:
             f"{side} has positive net EV ({ev.net_ev:.2f}c) after fees/slippage, fair value {ev.expected_settlement_value:.1f}c, "
             f"spread {snapshot.spread_cents}c, depth {snapshot.min_depth}, and time-to-cutoff {mins_left:.2f}m."
         )
-        if self.cfg.vol_bwk_enabled:
-            reason = f"BwK paper action {extra['action']} selected with score {extra['lagrangian_score']:.2f}; {bwk_info.get('bwk_rationale', 'fee-aware mean-reversion setup')}"
+        if self._manual_paper_enabled():
+            reason = f"Manual paper action {extra['action']} selected with score {extra['lagrangian_score']:.2f}; {manual_info.get('manual_rationale', 'simple paper state machine')}"
         invalidation = (
             f"Exit/avoid if recomputed EV drops below 0c, spread widens above {self.cfg.max_spread_cents}c, "
             f"or time remaining leaves the allowed window."
@@ -654,8 +627,8 @@ class BTC15mExecutionAgent:
         risk: RiskState | None = None,
         persist_state_path: str | Path | None = None,
     ) -> dict[str, Any] | None:
-        if self.cfg.vol_bwk_enabled and self.cfg.paper_only_vol_bwk and live_enabled:
-            raise RuntimeError("vol/BwK path is paper-only; refusing live execution.")
+        if self._manual_paper_enabled() and self.cfg.paper_only_vol_bwk and live_enabled:
+            raise RuntimeError("manual BTC15 paper path is paper-only; refusing live execution.")
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
         state = risk or RiskState(current_capital_usd=self.cfg.initial_capital_usd)
@@ -699,7 +672,8 @@ class BTC15mExecutionAgent:
             limit_price=float(limit_cents) / 100.0,
         )
         response = client.place_order(order)
-        next_state = self.apply_execution_to_risk(decision, state, fill_count=int(response.get("count", decision.quantity or 1)))
+        execution_fill_count = decision.quantity or int(response.get("count", 1))
+        next_state = self.apply_execution_to_risk(decision, state, fill_count=execution_fill_count)
         if persist_state_path is not None:
             save_risk_state(persist_state_path, next_state)
         realized_delta = round(next_state.realized_round_trip_pnl_usd - state.realized_round_trip_pnl_usd, 6)
@@ -710,7 +684,7 @@ class BTC15mExecutionAgent:
             "side": order_side,
             "action": decision.action,
             "limit_price": limit_cents,
-            "filled_size": response.get("count", 1),
+            "filled_size": execution_fill_count,
             "reward_cents": decision.reward_cents,
             "cost_cents": decision.cost_cents,
             "lagrangian_score": decision.lagrangian_score,

@@ -10,7 +10,7 @@ from kalshi_cricket_tracker.execution.kalshi import MockKalshiPaperClient
 
 MID_CFG = BTC15mExecConfig(
     enabled=True,
-    vol_bwk_enabled=False,
+    manual_paper_enabled=False,
     min_time_to_close_min=3.0,
     max_time_to_close_min=12.0,
     min_depth_contracts=25,
@@ -107,28 +107,28 @@ def test_algorithm_exits_open_position_when_signal_turns_negative():
 
 
 def test_algorithm_no_trade_does_not_log_executable_buy_action_when_blocked():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True})
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True})
     agent = BTC15mExecutionAgent(cfg)
     decision = agent.evaluate(make_snapshot(orderbook_stability_bps=500), RiskState())
     assert decision.decision == "NO TRADE"
     assert decision.action in {"skip", "hold"}
-    assert decision.state_context.get("bwk_action") in {"skip", "hold"}
+    assert decision.state_context.get("manual_action") in {"skip", "hold"}
 
 
 def test_band_logic_blocks_buy_above_entry_band():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60})
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "manual_entry_cents": 60})
     agent = BTC15mExecutionAgent(cfg)
     decision = agent.evaluate(make_snapshot(yes_ask_cents=67, yes_bid_cents=64, no_ask_cents=36, no_bid_cents=33), RiskState())
     assert decision.decision == "NO TRADE"
     assert decision.action == "skip"
 
 
-def test_band_logic_blocks_entry_when_price_not_near_entry_band():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60})
+def test_band_logic_prefers_side_closest_to_entry_band():
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "manual_entry_cents": 60})
     agent = BTC15mExecutionAgent(cfg)
-    decision = agent.evaluate(make_snapshot(yes_bid_cents=82, yes_ask_cents=83, no_bid_cents=17, no_ask_cents=18), RiskState())
+    decision = agent.evaluate(make_snapshot(yes_bid_cents=57, yes_ask_cents=58, no_bid_cents=17, no_ask_cents=18), RiskState())
     assert decision.decision == "TRADE"
-    assert decision.action == "buy_no_8"
+    assert decision.action == "buy_yes"
 
 
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
@@ -146,7 +146,7 @@ def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
 
 
 def test_hold_exits_when_profit_target_reached():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "profit_target_fraction": 0.10, "max_dollars_per_trade": 100.0})
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "profit_target_fraction": 0.10, "max_dollars_per_trade": 100.0})
     agent = BTC15mExecutionAgent(cfg)
     risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=100, entry_price_cents=15.0)
     decision = agent.evaluate(make_snapshot(yes_bid_cents=10, yes_ask_cents=11, no_bid_cents=90, no_ask_cents=91, current_position_side="NO", current_position_entry_cents=15), risk)
@@ -154,7 +154,7 @@ def test_hold_exits_when_profit_target_reached():
 
 
 def test_forced_time_exit_at_three_minutes():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "min_time_to_close_min": 3.0})
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "min_time_to_close_min": 3.0})
     agent = BTC15mExecutionAgent(cfg)
     risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=100, entry_price_cents=60.0)
     decision = agent.evaluate(make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=2, seconds=30), current_position_side="NO", current_position_entry_cents=60, no_bid_cents=65, no_ask_cents=66), risk)
@@ -165,7 +165,7 @@ def test_forced_time_exit_at_three_minutes():
 def test_sell_trade_logs_realized_pnl(tmp_path):
     from kalshi_cricket_tracker.execution.btc15m import CandidateDecision
 
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
     agent = BTC15mExecutionAgent(cfg)
     risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=1, entry_price_cents=18.0, reserved_capital_usd=0.18)
     decision = CandidateDecision(

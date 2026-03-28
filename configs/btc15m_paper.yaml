@@ -5,7 +5,7 @@ trading:
 
 btc15m:
   enabled: true
-  vol_bwk_enabled: true
+  manual_paper_enabled: true
   paper_only_vol_bwk: true
   initial_capital_usd: 100.0
   recycle_released_capital: true
@@ -26,5 +26,5 @@ btc15m:
   max_consecutive_losses: 3
   max_trades_per_hour: 4
   max_bad_slippage_cents: 2
-  band_entry_cents: 60
-  band_exit_cents: 80
+  manual_entry_cents: 60
+  manual_profit_target_usd: 10.0

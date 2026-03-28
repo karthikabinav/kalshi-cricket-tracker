@@ -79,6 +79,8 @@ class TradingConfig(BaseModel):
 
 class BTC15mExecConfig(BaseModel):
     enabled: bool = False
+    manual_paper_enabled: bool = False
+    # Deprecated compatibility switches for older BTC15 paper configs/tests.
     vol_bwk_enabled: bool = False
     paper_only_vol_bwk: bool = True
     initial_capital_usd: float = 100.0
@@ -111,6 +113,8 @@ class BTC15mExecConfig(BaseModel):
     min_ev_to_trade_cents: float = 0.5
     bwk_lambda_cost: float = 0.02
     bwk_expected_recovery_cents: float = 1.5
+    manual_entry_cents: int = 60
+    manual_profit_target_usd: float = 10.0
     band_entry_cents: int = 60
     band_exit_cents: int = 80
     risk_state_json: str = "btc15m_risk_state.json"

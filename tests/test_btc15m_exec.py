@@ -111,8 +111,8 @@ def test_btc15m_logs_candidate_trade_and_state(tmp_path):
     assert json.loads(state_lines[0])["decision_metrics"]["resulting_capital_usd"] is not None
 
 
-def test_btc15m_vol_bwk_buy_then_sell_updates_inventory_and_capital(tmp_path):
-    cfg = BTC15mExecConfig(enabled=True, vol_bwk_enabled=True, initial_capital_usd=100.0)
+def test_btc15m_manual_paper_state_machine_buy_then_sell_updates_inventory_and_capital(tmp_path):
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
     agent = BTC15mExecutionAgent(cfg)
     risk = RiskState(current_capital_usd=100.0)
 
@@ -130,7 +130,7 @@ def test_btc15m_vol_bwk_buy_then_sell_updates_inventory_and_capital(tmp_path):
     )
     decision_in = agent.evaluate(entry, risk)
     assert decision_in.decision == "TRADE"
-    assert decision_in.action.startswith("buy_yes")
+    assert decision_in.action == "buy_yes"
     agent.execute_candidate(decision_in, MockKalshiPaperClient(), tmp_path, live_enabled=False, risk=risk, persist_state_path=tmp_path / cfg.risk_state_json)
 
     risk_after_buy = RiskState(**json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8")))
@@ -139,10 +139,10 @@ def test_btc15m_vol_bwk_buy_then_sell_updates_inventory_and_capital(tmp_path):
 
     exit_snapshot = make_snapshot(
         close_time=datetime.now(timezone.utc) + timedelta(minutes=2),
-        yes_bid_cents=50,
-        yes_ask_cents=51,
-        no_bid_cents=49,
-        no_ask_cents=50,
+        yes_bid_cents=69,
+        yes_ask_cents=70,
+        no_bid_cents=30,
+        no_ask_cents=31,
         thesis_price_cents=50,
         microprice_cents=50.0,
         orderbook_imbalance=0.3,
@@ -150,7 +150,7 @@ def test_btc15m_vol_bwk_buy_then_sell_updates_inventory_and_capital(tmp_path):
         realized_vol_bps=40.0,
         local_mean_reversion_zscore=1.2,
         current_position_side="YES",
-        current_position_entry_cents=47,
+        current_position_entry_cents=59,
     )
     decision_out = agent.evaluate(exit_snapshot, risk_after_buy)
     assert decision_out.decision == "NO TRADE"
@@ -159,7 +159,7 @@ def test_btc15m_vol_bwk_buy_then_sell_updates_inventory_and_capital(tmp_path):
 
     risk_after_sell = RiskState(**json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8")))
     assert risk_after_sell.inventory_state == "FLAT"
-    assert risk_after_sell.realized_round_trip_pnl_usd is not None
+    assert risk_after_sell.realized_round_trip_pnl_usd > 0
 
 
 def test_load_snapshot_sequence_supports_jsonl(tmp_path):
