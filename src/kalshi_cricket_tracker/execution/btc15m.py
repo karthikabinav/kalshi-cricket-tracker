@@ -483,6 +483,9 @@ class BTC15mExecutionAgent:
                 "inventory_state_after": next_inventory,
                 **bwk_info,
             }
+            if blocked_reason is not None:
+                extra["bwk_action"] = visible_action
+                extra["bwk_next_state"] = risk.inventory_state
         else:
             extra = {
                 "action": action.lower(),

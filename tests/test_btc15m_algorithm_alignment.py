@@ -116,6 +116,7 @@ def test_algorithm_no_trade_does_not_log_executable_buy_action_when_blocked():
     decision = agent.evaluate(make_snapshot(orderbook_stability_bps=500), RiskState())
     assert decision.decision == "NO TRADE"
     assert decision.action in {"skip", "hold"}
+    assert decision.state_context.get("bwk_action") in {"skip", "hold"}
 
 
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
