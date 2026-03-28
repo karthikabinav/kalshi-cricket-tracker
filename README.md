@@ -1,19 +1,24 @@
-# kalshi-cricket-tracker
+# kalshi-trading-research
 
-MVP research assistant for cricket-driven Kalshi market exploration (**paper mode by default**), plus a separate **BTC 15-minute execution agent** that is disabled by default and only trades when all configured safety checks pass.
+Paper-first research and execution toolkit for **Kalshi trading workflows**.
+
+The repo now covers two layers:
+1. **General Kalshi strategy research infrastructure** — backtests, paper execution, logging, dashboards, risk controls, and pluggable data/model adapters.
+2. **Concrete strategy modules** — including the original cricket research pipeline and the newer **BTC 15-minute execution agent**.
+
+Live trading remains disabled by default and guarded behind explicit config and credential checks.
 
 ## Scope
-- Public data ingest (Cricsheet historical + ESPN fixtures best-effort)
-- Feature engineering (Elo, recent form, edge features)
-- Rule-based daily signal generation + risk limits
-- Pluggable odds adapters (proxy, local CSV, provider stub)
-- Contextual bandit strategy (budget-constrained, risk-adjusted)
+- Paper-first Kalshi trading research and execution tooling
 - Backtesting metrics: PnL, Sharpe, max drawdown, hit-rate
 - Mock Kalshi integration (paper fills)
 - Optional Kalshi REST scaffold (disabled unless explicitly enabled)
 - CLI + minimal Streamlit dashboard
-- Static BTC15 dashboard for Vercel deployment (`dashboard/`), with client-side polling to pick up newly deployed snapshots
+- Static Vercel-friendly dashboard for monitoring (`dashboard/`)
 - Tests + reproducible scripts
+- Strategy modules currently included:
+  - cricket market research pipeline (historical ingest, features, daily signals, odds adapters, contextual bandit)
+  - BTC 15-minute execution agent and replay / paper monitoring flow
 
 ## Install
 ```bash
@@ -60,13 +65,15 @@ Or run end-to-end:
 - `kct btc15m-paper-live`: run BTC15m paper-mode decisioning directly against live market data
 - `kct dashboard`: prints launch command
 
-## Odds adapters
+## Strategy adapters and model inputs
+The repo supports pluggable adapters for strategy-specific data and model inputs.
+
+### Cricket pipeline adapters
 Configured under `odds:` in YAML:
 - `provider: proxy` (default) uses model-probability shrinkage
 - `provider: csv` reads `event_id,market_prob_team1` from a local CSV
 - `provider: provider_stub` placeholder for a future real API provider
 
-## Reference win-prob adapters (model side)
 Configured under `winprob:` in YAML:
 - `provider: elo_only` (default) uses Elo-derived probability
 - `provider: csv` reads `event_id,external_prob_team1` from a local CSV
