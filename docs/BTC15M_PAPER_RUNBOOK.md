@@ -7,15 +7,13 @@ Run the BTC 15m execution agent safely in paper mode against live Kalshi market 
 - Virtualenv exists and dependencies are installed.
 - Config: `configs/btc15m_paper.yaml`
 - Risk state file exists or defaults are acceptable.
-- You have an internal thesis price in YES cents for the chosen market.
 
 ## Step 1: Fetch a live BTC15m snapshot
 Auto-discover nearest open BTC15m market:
 
 ```bash
 .venv/bin/python -m kalshi_cricket_tracker.cli btc15m-fetch-live-snapshot \
-  --config configs/btc15m_paper.yaml \
-  --thesis-price-cents 60
+  --config configs/btc15m_paper.yaml
 ```
 
 Or target a specific ticker:
@@ -23,8 +21,7 @@ Or target a specific ticker:
 ```bash
 .venv/bin/python -m kalshi_cricket_tracker.cli btc15m-fetch-live-snapshot \
   --config configs/btc15m_paper.yaml \
-  --ticker <KALSHI_BTC15M_TICKER> \
-  --thesis-price-cents 60
+  --ticker <KALSHI_BTC15M_TICKER>
 ```
 
 Expected outcomes:
@@ -36,7 +33,6 @@ Expected outcomes:
 ```bash
 .venv/bin/python -m kalshi_cricket_tracker.cli btc15m-paper-live \
   --config configs/btc15m_paper.yaml \
-  --thesis-price-cents 60 \
   --risk-json artifacts/btc15m_risk_state.example.json
 ```
 
@@ -46,7 +42,6 @@ Optional explicit ticker:
 .venv/bin/python -m kalshi_cricket_tracker.cli btc15m-paper-live \
   --config configs/btc15m_paper.yaml \
   --ticker <KALSHI_BTC15M_TICKER> \
-  --thesis-price-cents 60 \
   --risk-json artifacts/btc15m_risk_state.example.json
 ```
 
@@ -83,4 +78,4 @@ This updates the same risk-state JSON and appends to the paper logs, so replay r
 - First live launch should stop before first order unless explicitly approved again.
 
 ## Known limitation
-Paper mode still depends on an externally supplied thesis price (`--thesis-price-cents`). The current code does not yet infer a BTC directional thesis autonomously from a market data model.
+Paper mode now uses the encoded late-window microstructure policy directly. The remaining limitation is not thesis generation; it is validating the policy across enough real BTC15m market lifecycles before any live promotion.

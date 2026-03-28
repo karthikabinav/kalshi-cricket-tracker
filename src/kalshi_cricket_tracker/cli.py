@@ -234,7 +234,6 @@ def btc15m_fetch_live_snapshot(
 
 @app.command("btc15m-paper-live")
 def btc15m_paper_live(
-    thesis_price_cents: int = typer.Option(..., help="Internal fair value in cents for YES; required for decisioning"),
     ticker: str | None = typer.Option(None, help="Optional explicit BTC15m ticker; default discovers nearest open one"),
     risk_json: str | None = typer.Option(None, help="Optional path to risk state JSON"),
     btc_spot: float | None = typer.Option(None, help="Optional BTC spot reference"),
@@ -243,7 +242,7 @@ def btc15m_paper_live(
     cfg = load_config(config)
     art = ensure_artifacts_dir(cfg)
     try:
-        snapshot = fetch_live_snapshot(KalshiRestClient.public(cfg.trading), ticker=ticker, thesis_price_cents=thesis_price_cents, btc_spot=btc_spot)
+        snapshot = fetch_live_snapshot(KalshiRestClient.public(cfg.trading), ticker=ticker, btc_spot=btc_spot)
     except RuntimeError as exc:
         print(f"[yellow]{exc}[/yellow]")
         raise typer.Exit(code=1)
@@ -259,7 +258,6 @@ def btc15m_paper_live(
 
 @app.command("btc15m-paper-watch")
 def btc15m_paper_watch(
-    thesis_price_cents: int = typer.Option(..., help="Internal fair value in cents for YES; required for decisioning"),
     ticker: str | None = typer.Option(None, help="Optional explicit event/market ticker to monitor"),
     risk_json: str | None = typer.Option(None, help="Optional path to risk state JSON"),
     btc_spot: float | None = typer.Option(None, help="Optional BTC spot reference"),
@@ -273,7 +271,7 @@ def btc15m_paper_watch(
     last_ticker = None
     for _ in range(max_polls):
         try:
-            snapshot = fetch_live_snapshot(client, ticker=ticker, thesis_price_cents=thesis_price_cents, btc_spot=btc_spot)
+            snapshot = fetch_live_snapshot(client, ticker=ticker, btc_spot=btc_spot)
         except RuntimeError as exc:
             print(f"[yellow]{exc}[/yellow]")
             time.sleep(max(5, poll_seconds))
