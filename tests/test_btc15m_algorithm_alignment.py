@@ -122,6 +122,14 @@ def test_algorithm_no_trade_does_not_log_executable_buy_action_when_blocked():
     assert decision.state_context.get("bwk_action") in {"skip", "hold"}
 
 
+def test_band_logic_blocks_buy_above_entry_band():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60})
+    agent = BTC15mExecutionAgent(cfg)
+    decision = agent.evaluate(make_snapshot(yes_ask_cents=67, yes_bid_cents=64, no_ask_cents=36, no_bid_cents=33), RiskState())
+    assert decision.decision == "NO TRADE"
+    assert decision.action == "skip"
+
+
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
     cfg = MID_CFG.model_copy(update={"candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
     agent = BTC15mExecutionAgent(cfg)

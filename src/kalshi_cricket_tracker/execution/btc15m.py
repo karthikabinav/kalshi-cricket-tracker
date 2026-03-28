@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from kalshi_cricket_tracker.config import BTC15mExecConfig
 from kalshi_cricket_tracker.execution.kalshi import KalshiClientInterface, KalshiOrder
-from kalshi_cricket_tracker.strategy.btc15m_vol_bwk import FeeSchedule, Position, VolBanditsWithKnapsackPolicy, VolSnapshot
+from kalshi_cricket_tracker.strategy.btc15m_vol_bwk import BwKActionEvaluation, FeeSchedule, Position, VolBanditsWithKnapsackPolicy, VolSnapshot
 
 
 @dataclass
@@ -345,6 +345,15 @@ class BTC15mExecutionAgent:
             budget_remaining=self._capital_remaining(risk) * 100.0,
             expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
         )
+
+        if evaluation.action.startswith("buy_yes") and snapshot.yes_ask_cents > self.cfg.band_entry_cents:
+            evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: ask {snapshot.yes_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
+        elif evaluation.action.startswith("buy_no") and snapshot.no_ask_cents > self.cfg.band_entry_cents:
+            evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: ask {snapshot.no_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
+        elif evaluation.action == "hold_position" and position.state == "LONG_YES" and snapshot.yes_bid_cents >= self.cfg.band_exit_cents:
+            evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_yes", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
+        elif evaluation.action == "hold_position" and position.state == "LONG_NO" and snapshot.no_bid_cents >= self.cfg.band_exit_cents:
+            evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_no", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
         size = position.qty or self.bwk_policy.entry_qty
         unrealized_cents = self.bwk_policy.mark_to_market(position, vol_snapshot)
         gross_edge = evaluation.reward if evaluation.action not in {"hold", "hold_position", "skip"} else unrealized_cents

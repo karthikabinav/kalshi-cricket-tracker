@@ -110,6 +110,8 @@ class BTC15mExecConfig(BaseModel):
     min_ev_to_trade_cents: float = 0.5
     bwk_lambda_cost: float = 0.02
     bwk_expected_recovery_cents: float = 1.5
+    band_entry_cents: int = 60
+    band_exit_cents: int = 80
     risk_state_json: str = "btc15m_risk_state.json"
     candidate_log_jsonl: str = "btc15m_candidate_decisions.jsonl"
     executed_log_jsonl: str = "btc15m_executed_trades.jsonl"

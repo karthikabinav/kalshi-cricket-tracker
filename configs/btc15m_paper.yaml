@@ -25,3 +25,5 @@ btc15m:
   max_consecutive_losses: 3
   max_trades_per_hour: 4
   max_bad_slippage_cents: 2
+  band_entry_cents: 60
+  band_exit_cents: 80
