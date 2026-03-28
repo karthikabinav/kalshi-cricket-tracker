@@ -366,6 +366,13 @@ class BTC15mExecutionAgent:
             evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_no", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
         size = position.qty or self.bwk_policy.entry_qty
         unrealized_cents = self.bwk_policy.mark_to_market(position, vol_snapshot)
+        target_profit_usd = self.cfg.max_dollars_per_trade * self.cfg.profit_target_fraction
+        unrealized_profit_usd = (unrealized_cents / 100.0) * max(1, size)
+        if evaluation.action == "hold_position" and unrealized_profit_usd >= target_profit_usd:
+            if position.state == "LONG_YES":
+                evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_yes", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
+            elif position.state == "LONG_NO":
+                evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_no", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
         gross_edge = evaluation.reward if evaluation.action not in {"hold", "hold_position", "skip"} else unrealized_cents
         fees = evaluation.fee_load
         net_ev = evaluation.lagrangian_score
@@ -485,7 +492,10 @@ class BTC15mExecutionAgent:
         qty = risk.inventory_qty or ev.recommended_size or 1
         if self.cfg.vol_bwk_enabled:
             next_inventory = bwk_info.get("bwk_next_state", risk.inventory_state)
-            resulting_capital = risk.current_capital_usd - max(0.0, (bwk_info.get("bwk_cost_cents") or 0.0) / 100.0)
+            entry_basis_cents = snapshot.yes_ask_cents if bwk_info.get("bwk_action", "").startswith("buy_yes") else snapshot.no_ask_cents if bwk_info.get("bwk_action", "").startswith("buy_no") else snapshot.yes_bid_cents if bwk_info.get("bwk_action") == "sell_yes" else snapshot.no_bid_cents if bwk_info.get("bwk_action") == "sell_no" else 100
+            sized_qty = max(1, int(self.cfg.max_dollars_per_trade / max(0.01, entry_basis_cents / 100.0)))
+            qty = max(qty, sized_qty)
+            resulting_capital = risk.current_capital_usd - max(0.0, qty * (bwk_info.get("bwk_cost_cents") or 0.0) / 100.0)
             visible_action = bwk_info.get("bwk_action", "skip")
             if blocked_reason is not None:
                 visible_action = "hold" if snapshot.current_position_side or risk.inventory_state != "FLAT" else "skip"

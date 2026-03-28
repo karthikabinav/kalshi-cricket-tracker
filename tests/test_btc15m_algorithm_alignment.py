@@ -152,6 +152,14 @@ def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
     assert "current_capital_usd" in saved_risk
 
 
+def test_hold_exits_when_profit_target_reached():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "profit_target_fraction": 0.10, "max_dollars_per_trade": 100.0})
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=100, entry_price_cents=15.0)
+    decision = agent.evaluate(make_snapshot(yes_bid_cents=10, yes_ask_cents=11, no_bid_cents=90, no_ask_cents=91, current_position_side="NO", current_position_entry_cents=15), risk)
+    assert decision.action == "sell_no"
+
+
 def test_sell_trade_logs_realized_pnl(tmp_path):
     from kalshi_cricket_tracker.execution.btc15m import CandidateDecision
 

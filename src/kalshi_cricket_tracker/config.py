@@ -96,6 +96,7 @@ class BTC15mExecConfig(BaseModel):
     target_take_profit_cents: int = 2
     min_confidence: int = 60
     max_dollars_per_trade: float = 100.0
+    profit_target_fraction: float = 0.10
     max_simultaneous_positions: int = 1
     max_daily_loss_usd: float = 150.0
     max_consecutive_losses: int = 3

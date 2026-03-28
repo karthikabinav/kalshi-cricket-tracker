@@ -20,6 +20,7 @@ btc15m:
   target_take_profit_cents: 2
   min_confidence: 60
   max_dollars_per_trade: 100.0
+  profit_target_fraction: 0.10
   max_simultaneous_positions: 1
   max_daily_loss_usd: 150.0
   max_consecutive_losses: 3
