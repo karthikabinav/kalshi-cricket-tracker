@@ -53,6 +53,8 @@ Or run end-to-end:
 - `kct bandit-backtest`: contextual bandit backtest
 - `kct arb-backtest`: snapshot-based under/over-calibration trading backtest with open/close logic
 - `kct btc15m-exec`: evaluate a single BTC 15m market snapshot, log the candidate decision, and optionally send a live limit order only when global live-trading guards are explicitly enabled
+- `kct btc15m-fetch-live-snapshot`: discover/fetch a live BTC15m market snapshot from Kalshi public market data
+- `kct btc15m-paper-live`: run BTC15m paper-mode decisioning directly against live market data
 - `kct dashboard`: prints launch command
 
 ## Odds adapters
@@ -91,14 +93,16 @@ If any guard fails, `run-daily` / `btc15m-exec` abort before placing live orders
 ## BTC 15m execution agent
 The BTC 15m agent is intentionally narrow:
 - Only accepts tickers that look like BTC 15-minute markets
-- Defaults to **NO TRADE** unless all required rule, timing, liquidity, spread, stability, edge, confidence, and risk checks pass
+- Defaults to **NO TRADE** unless all required rule, timing, liquidity, spread, stability, EV, confidence, and risk checks pass
 - Uses **limit orders only**
 - Caps notional at `$100` per trade and one open directional BTC position by default
+- Computes conservative per-candidate EV with explicit fees, slippage, and safety buffer via `estimate_trade_ev(...)`
+- Exposes a strict action surface via `decide_trade(...)` returning only `ENTER_LONG_YES | ENTER_LONG_NO | HOLD | EXIT | SKIP`
 - Logs every candidate decision to `artifacts/btc15m_candidate_decisions.jsonl`
 - Logs every submitted/paper trade to `artifacts/btc15m_executed_trades.jsonl`
 
 ### Snapshot input
-`btc15m-exec` currently expects a JSON snapshot with the fields used by the decision engine. Example:
+`btc15m-exec` expects a JSON snapshot with the core market state plus optional EV features. Example:
 
 ```json
 {
@@ -106,18 +110,40 @@ The BTC 15m agent is intentionally narrow:
   "rules": "Resolves to YES if BTC settles above threshold at close.",
   "status": "open",
   "close_time": "2026-03-01T00:08:00Z",
-  "yes_ask_cents": 58,
-  "yes_bid_cents": 57,
-  "no_ask_cents": 43,
-  "no_bid_cents": 42,
+  "yes_ask_cents": 82,
+  "yes_bid_cents": 80,
+  "no_ask_cents": 20,
+  "no_bid_cents": 18,
   "best_yes_ask_size": 50,
   "best_yes_bid_size": 60,
   "best_no_ask_size": 55,
   "best_no_bid_size": 65,
   "orderbook_stability_bps": 20,
-  "thesis_price_cents": 63
+  "btc_spot": 98025.4,
+  "thesis_price_cents": 86,
+  "realized_vol_bps": 25,
+  "microprice_cents": 85.0,
+  "orderbook_imbalance": 0.25,
+  "depth_contracts": 50,
+  "recent_trades_count": 12,
+  "recent_trade_buy_ratio": 0.7,
+  "settlement_signal_strength": 0.2,
+  "current_position_side": null,
+  "current_position_entry_cents": null
 }
 ```
+
+Current EV slice uses:
+- BTC spot
+- contract price / distance-from-target (derived when thesis is present)
+- time to cutoff
+- short-horizon realized vol
+- microprice / order-book imbalance
+- spread / depth
+- recent trade flow
+- settlement-aware signal strength
+
+If an open position is included in the snapshot, the agent will re-evaluate and can return `HOLD` or `EXIT` instead of a fresh entry.
 
 The user should place Kalshi credentials in environment variables only. Recommended workflow:
 ```bash

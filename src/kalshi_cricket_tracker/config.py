@@ -79,22 +79,29 @@ class TradingConfig(BaseModel):
 
 class BTC15mExecConfig(BaseModel):
     enabled: bool = False
-    min_time_to_close_min: float = 4.0
-    max_time_to_close_min: float = 12.0
+    min_time_to_close_min: float = 20.0 / 60.0
+    max_time_to_close_min: float = 120.0 / 60.0
     min_depth_contracts: int = 25
     max_spread_cents: int = 2
     max_orderbook_instability_bps: float = 60.0
-    min_edge_cents: int = 4
+    dominant_side_min_cents: int = 80
     exit_edge_cents: int = 1
-    min_reward_cents: int = 2
-    target_take_profit_cents: int = 4
-    min_confidence: int = 65
+    min_reward_cents: int = 1
+    target_take_profit_cents: int = 2
+    min_confidence: int = 60
     max_dollars_per_trade: float = 100.0
     max_simultaneous_positions: int = 1
     max_daily_loss_usd: float = 150.0
     max_consecutive_losses: int = 3
     max_trades_per_hour: int = 4
     max_bad_slippage_cents: int = 2
+    fee_bps_per_side: float = 10.0
+    maker_fill_fraction: float = 0.0
+    safety_buffer_cents: float = 1.0
+    max_slippage_cents: float = 2.0
+    stop_loss_cents: int = 3
+    size_kelly_fraction: float = 0.1
+    min_ev_to_trade_cents: float = 0.5
     candidate_log_jsonl: str = "btc15m_candidate_decisions.jsonl"
     executed_log_jsonl: str = "btc15m_executed_trades.jsonl"
 
