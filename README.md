@@ -63,6 +63,8 @@ Or run end-to-end:
 - `kct btc15m-exec`: evaluate a single BTC 15m market snapshot, log the candidate decision, and optionally send a live limit order only when global live-trading guards are explicitly enabled
 - `kct btc15m-fetch-live-snapshot`: discover/fetch a live BTC15m market snapshot from Kalshi public market data
 - `kct btc15m-paper-live`: run BTC15m paper-mode decisioning directly against live market data
+- `kct btc15m-paper-run-market`: run one full BTC15 market worker lifecycle with finalize hooks
+- `kct btc15m-paper-supervisor`: rotate sequential one-market workers and finalize each market
 - `kct dashboard`: prints launch command
 
 ## Strategy adapters and model inputs

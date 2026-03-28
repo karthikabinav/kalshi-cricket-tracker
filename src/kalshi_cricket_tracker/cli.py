@@ -256,6 +256,31 @@ def btc15m_paper_live(
     print(decision.render())
 
 
+@app.command("btc15m-paper-run-market")
+def btc15m_paper_run_market(
+    ticker: str | None = typer.Option(None, help="Optional explicit market ticker"),
+    max_runtime_seconds: int = typer.Option(900, help="Max runtime for one market worker"),
+    poll_seconds: float = typer.Option(2.0, help="Polling interval seconds"),
+    risk_json: str | None = typer.Option(None, help="Optional risk-state path"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    result = run_market_worker(cfg, ticker=ticker, max_runtime_seconds=max_runtime_seconds, poll_seconds=poll_seconds, risk_json=risk_json)
+    print(json.dumps(result.__dict__, indent=2))
+
+
+@app.command("btc15m-paper-supervisor")
+def btc15m_paper_supervisor(
+    markets: int = typer.Option(1, help="Number of sequential markets to process"),
+    max_runtime_seconds: int = typer.Option(900, help="Max runtime per market worker"),
+    poll_seconds: float = typer.Option(2.0, help="Polling interval seconds"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    results = run_supervisor(cfg, markets=markets, poll_seconds=poll_seconds, max_runtime_seconds=max_runtime_seconds)
+    print(json.dumps([r.__dict__ for r in results], indent=2))
+
+
 @app.command("btc15m-paper-watch")
 def btc15m_paper_watch(
     ticker: str | None = typer.Option(None, help="Optional explicit event/market ticker to monitor"),
