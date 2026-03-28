@@ -85,8 +85,8 @@ class BTC15mExecConfig(BaseModel):
     recycle_released_capital: bool = True
     maker_fee_bps: float = 10.0
     taker_fee_bps: float = 10.0
-    min_time_to_close_min: float = 20.0 / 60.0
-    max_time_to_close_min: float = 120.0 / 60.0
+    min_time_to_close_min: float = 3.0
+    max_time_to_close_min: float = 12.0
     min_depth_contracts: int = 25
     max_spread_cents: int = 2
     max_orderbook_instability_bps: float = 60.0

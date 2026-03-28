@@ -103,6 +103,7 @@ If any guard fails, `run-daily` / `btc15m-exec` abort before placing live orders
 ## BTC 15m execution agent
 The BTC 15m agent is intentionally narrow:
 - Only accepts tickers that look like BTC 15-minute markets
+- Uses a mid-market execution window only: no trades in the first 3 minutes or the last 3 minutes of a 15-minute contract
 - Defaults to **NO TRADE** unless all required rule, timing, liquidity, spread, stability, EV, confidence, and risk checks pass
 - Uses **limit orders only**
 - Caps notional at `$100` per trade and one open directional BTC position by default

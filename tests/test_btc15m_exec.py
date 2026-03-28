@@ -13,7 +13,7 @@ def make_snapshot(**overrides):
         ticker="KXBTC15M-TEST-15",
         rules="Resolves to YES if BTC settles above threshold at close.",
         status="open",
-        close_time=datetime.now(timezone.utc) + timedelta(seconds=70),
+        close_time=datetime.now(timezone.utc) + timedelta(minutes=8),
         yes_ask_cents=80,
         yes_bid_cents=80,
         no_ask_cents=22,
@@ -44,19 +44,19 @@ def test_btc15m_defaults_to_no_trade_when_disabled():
 
 
 def test_btc15m_abstains_when_too_close_to_close():
-    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, min_time_to_close_min=20 / 60))
-    snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(seconds=10))
+    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, min_time_to_close_min=3.0))
+    snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=2))
     decision = agent.evaluate(snapshot, RiskState())
     assert decision.decision == "NO TRADE"
-    assert "late-entry chaos" in decision.reason.lower()
+    assert "final 3-minute" in decision.reason.lower()
 
 
 def test_btc15m_abstains_when_too_early_for_window():
-    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, max_time_to_close_min=2.0))
-    snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=5))
+    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, max_time_to_close_min=12.0))
+    snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=13))
     decision = agent.evaluate(snapshot, RiskState())
     assert decision.decision == "NO TRADE"
-    assert "too early" in decision.reason.lower()
+    assert "first 3-minute" in decision.reason.lower()
 
 
 def test_btc15m_estimate_trade_ev_prefers_positive_yes_entry():
@@ -180,3 +180,9 @@ def test_load_snapshot_sequence_supports_jsonl(tmp_path):
     seq = load_snapshot_sequence(path)
     assert len(seq) == 2
     assert seq[0].snapshot_sequence_id == "seq-1"
+
+
+def test_btc15m_mid_window_trade_still_allowed():
+    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, min_confidence=20, min_time_to_close_min=3.0, max_time_to_close_min=12.0))
+    decision = agent.evaluate(make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=8)), RiskState())
+    assert decision.decision == "TRADE"
