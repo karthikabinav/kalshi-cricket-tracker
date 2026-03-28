@@ -19,6 +19,7 @@ from kalshi_cricket_tracker.execution.btc15m import (
     load_snapshot_sequence,
     save_risk_state,
 )
+from kalshi_cricket_tracker.execution.btc15m_lifecycle import run_market_worker, run_supervisor
 from kalshi_cricket_tracker.execution.guards import validate_trading_mode
 from kalshi_cricket_tracker.execution.kalshi import KalshiOrder, KalshiRestClient, MockKalshiPaperClient
 from kalshi_cricket_tracker.strategy.contextual_bandit import run_bandit_backtest
