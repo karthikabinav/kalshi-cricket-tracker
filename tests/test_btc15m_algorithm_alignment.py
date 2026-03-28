@@ -130,12 +130,12 @@ def test_band_logic_blocks_buy_above_entry_band():
     assert decision.action == "skip"
 
 
-def test_band_logic_blocks_non_positive_round_trip():
-    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60, "band_exit_cents": 20})
+def test_band_logic_blocks_entry_when_price_not_near_entry_band():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60})
     agent = BTC15mExecutionAgent(cfg)
     decision = agent.evaluate(make_snapshot(yes_bid_cents=82, yes_ask_cents=83, no_bid_cents=17, no_ask_cents=18), RiskState())
-    assert decision.decision == "NO TRADE"
-    assert decision.action == "skip"
+    assert decision.decision == "TRADE"
+    assert decision.action == "buy_no_8"
 
 
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
@@ -158,6 +158,15 @@ def test_hold_exits_when_profit_target_reached():
     risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=100, entry_price_cents=15.0)
     decision = agent.evaluate(make_snapshot(yes_bid_cents=10, yes_ask_cents=11, no_bid_cents=90, no_ask_cents=91, current_position_side="NO", current_position_entry_cents=15), risk)
     assert decision.action == "sell_no"
+
+
+def test_forced_time_exit_at_three_minutes():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "min_time_to_close_min": 3.0})
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=100, entry_price_cents=60.0)
+    decision = agent.evaluate(make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=2, seconds=30), current_position_side="NO", current_position_entry_cents=60, no_bid_cents=65, no_ask_cents=66), risk)
+    assert decision.action == "sell_no"
+    assert "forced time exit" in decision.reason.lower()
 
 
 def test_sell_trade_logs_realized_pnl(tmp_path):

@@ -338,13 +338,29 @@ class BTC15mExecutionAgent:
     def _evaluate_vol_bwk(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
         position = risk.position()
         vol_snapshot = self._to_vol_snapshot(snapshot)
-        evaluation = self.bwk_policy.choose_action(
-            position=position,
-            snapshot=vol_snapshot,
-            lambda_cost=self.cfg.bwk_lambda_cost,
-            budget_remaining=self._capital_remaining(risk) * 100.0,
-            expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
-        )
+
+        # Manual-policy state machine:
+        # - flat: enter near 60c with ~$100 principal
+        # - in position: hold until +10% profit target or forced time exit at 3m
+        if position.state == "FLAT":
+            candidates = []
+            if snapshot.yes_ask_cents <= self.cfg.band_entry_cents:
+                candidates.append((abs(self.cfg.band_entry_cents - snapshot.yes_ask_cents), "buy_yes_8", snapshot.yes_ask_cents))
+            if snapshot.no_ask_cents <= self.cfg.band_entry_cents:
+                candidates.append((abs(self.cfg.band_entry_cents - snapshot.no_ask_cents), "buy_no_8", snapshot.no_ask_cents))
+            if candidates:
+                _, action, entry_cents = sorted(candidates, key=lambda x: x[0])[0]
+                evaluation = self.bwk_policy.evaluate_action(
+                    position=position,
+                    snapshot=vol_snapshot,
+                    action=action,
+                    lambda_cost=self.cfg.bwk_lambda_cost,
+                    expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
+                )
+            else:
+                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"no entry candidate at or below {self.cfg.band_entry_cents}c")
+        else:
+            evaluation = BwKActionEvaluation(action="hold_position", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale="holding until target profit or forced time exit")
 
         if evaluation.action.startswith("buy_yes"):
             projected_exit = max(snapshot.yes_bid_cents, self.cfg.band_exit_cents)
@@ -530,6 +546,11 @@ class BTC15mExecutionAgent:
             }
 
         if blocked_reason is not None:
+            if snapshot.current_position_side is not None and mins_left <= self.cfg.min_time_to_close_min:
+                forced_action = "sell_yes" if snapshot.current_position_side == "YES" else "sell_no"
+                extra["action"] = forced_action
+                extra["inventory_state_after"] = "FLAT"
+                return abstain("Forced time exit at 3-minute cutoff.", confidence=confidence, extra=extra)
             return abstain(blocked_reason, confidence=confidence, extra=extra)
         if action not in {"ENTER_LONG_YES", "ENTER_LONG_NO"}:
             if action == "EXIT":
