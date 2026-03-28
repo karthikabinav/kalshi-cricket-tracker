@@ -9,6 +9,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
 OUT = ROOT / "dashboard" / "data" / "dashboard-data.json"
+INITIAL_CAPITAL_USD = 100.0
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -21,6 +22,12 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         rows.append(json.loads(line))
     return rows
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def read_csv_rows(path: Path) -> list[dict[str, Any]]:
@@ -87,9 +94,40 @@ def sort_key(ts: str | None) -> tuple[int, str]:
     return (0, ts)
 
 
+def to_dt(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def hourly_average_pnl(realized: list[dict[str, Any]]) -> float | None:
+    if not realized:
+        return None
+    times = [to_dt(t.get("entryTime")) for t in realized]
+    times = [t for t in times if t is not None]
+    if not times:
+        return None
+    span_hours = max((max(times) - min(times)).total_seconds() / 3600.0, 1.0)
+    total = sum(float(t["pnlUsd"]) for t in realized)
+    return round(total / span_hours, 4)
+
+
+def current_capital_usd(realized_total: float, risk_state: dict[str, Any] | None) -> float:
+    if risk_state:
+        capital = parse_float(risk_state.get("current_capital_usd"))
+        if capital is not None:
+            return round(capital, 4)
+    return round(INITIAL_CAPITAL_USD + realized_total, 4)
+
+
 def build_payload() -> dict[str, Any]:
     executed_trades = [normalize_trade(r) for r in read_jsonl(ARTIFACTS / "btc15m_executed_trades.jsonl")]
     decisions = [normalize_decision(r) for r in read_jsonl(ARTIFACTS / "btc15m_candidate_decisions.jsonl")]
+    state_trace = read_jsonl(ARTIFACTS / "btc15m_state_trace.jsonl")
+    risk_state = read_json(ARTIFACTS / "btc15m_risk_state.json")
     _paper_fills = read_csv_rows(ARTIFACTS / "paper_fills.csv")
 
     executed_trades.sort(key=lambda row: sort_key(row.get("entryTime")), reverse=True)
@@ -100,6 +138,9 @@ def build_payload() -> dict[str, Any]:
     total_volume = round(sum(float(t.get("volumeUsd") or 0.0) for t in executed_trades), 4)
     open_count = sum(1 for t in executed_trades if t.get("status") == "OPEN")
     closed_count = sum(1 for t in executed_trades if t.get("status") == "CLOSED")
+    hourly_avg_pnl = hourly_average_pnl(realized)
+    capital_now = current_capital_usd(realized_total, risk_state)
+    hourly_avg_trades = round(len(executed_trades) / max(1.0, ((max([to_dt(t.get("entryTime")) for t in executed_trades if to_dt(t.get("entryTime"))] or [datetime.now(timezone.utc)]) - min([to_dt(t.get("entryTime")) for t in executed_trades if to_dt(t.get("entryTime"))] or [datetime.now(timezone.utc)])).total_seconds() / 3600.0 or 1.0)), 4) if executed_trades else None
 
     cumulative = 0.0
     pnl_series = []
@@ -108,12 +149,14 @@ def build_payload() -> dict[str, Any]:
         pnl_series.append({"at": trade.get("entryTime"), "cumulativePnlUsd": round(cumulative, 4), "ticker": trade.get("ticker")})
 
     assumptions = [
-        "PnL is realized-only: the dashboard sums numeric `pnl` values from `btc15m_executed_trades.jsonl` and excludes null/unknown values.",
+        "Current capital uses `artifacts/btc15m_risk_state.json` when present; otherwise it falls back to initial capital plus realized PnL.",
+        "Overall PnL is realized-only: numeric `pnl` values from `btc15m_executed_trades.jsonl` are summed, while null/unknown values remain open/unrealized.",
+        "Hourly average PnL is realized PnL divided by observed realized-trade time span in hours, floored at 1 hour to avoid noisy division.",
         "Transaction volume uses `raw_response.stake_usd` when present; otherwise it falls back to `filled_size * limit_price / 100`.",
-        "Trades with null `pnl` and null `exit_price` are labeled OPEN; everything else is treated as CLOSED for UI purposes.",
-        "Decision context is sourced from `btc15m_candidate_decisions.jsonl`; it is informational and separate from executed trade accounting.",
         "The payload is a static snapshot generated at build time, so Vercel serves the last exported artifact state rather than reading live logs at runtime.",
     ]
+
+    latest_state = state_trace[-1] if state_trace else None
 
     return {
         "meta": {
@@ -122,10 +165,16 @@ def build_payload() -> dict[str, Any]:
             "artifactFiles": [
                 "artifacts/btc15m_executed_trades.jsonl",
                 "artifacts/btc15m_candidate_decisions.jsonl",
+                "artifacts/btc15m_risk_state.json",
+                "artifacts/btc15m_state_trace.jsonl",
                 "artifacts/paper_fills.csv",
             ],
         },
         "summary": {
+            "currentCapitalUsd": capital_now,
+            "overallPnlUsd": realized_total,
+            "hourlyAveragePnlUsd": hourly_avg_pnl,
+            "hourlyAverageTrades": hourly_avg_trades,
             "realizedPnlUsd": realized_total,
             "totalTransactionVolumeUsd": total_volume,
             "executedTradeCount": len(executed_trades),
@@ -133,9 +182,10 @@ def build_payload() -> dict[str, Any]:
             "closedTradeCount": closed_count,
             "tradesWithRealizedPnl": len(realized),
             "lastDecision": decisions[0] if decisions else None,
+            "latestState": latest_state,
         },
         "assumptions": assumptions,
-        "trades": executed_trades[:25],
+        "trades": executed_trades,
         "decisions": decisions[:8],
         "pnlSeries": pnl_series,
     }

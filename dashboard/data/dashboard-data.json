@@ -1,14 +1,20 @@
 {
   "meta": {
-    "generatedAt": "2026-03-28T01:07:48.143297+00:00",
+    "generatedAt": "2026-03-28T02:26:44.962844+00:00",
     "dataSource": "repo artifacts",
     "artifactFiles": [
       "artifacts/btc15m_executed_trades.jsonl",
       "artifacts/btc15m_candidate_decisions.jsonl",
+      "artifacts/btc15m_risk_state.json",
+      "artifacts/btc15m_state_trace.jsonl",
       "artifacts/paper_fills.csv"
     ]
   },
   "summary": {
+    "currentCapitalUsd": 100.0,
+    "overallPnlUsd": 0,
+    "hourlyAveragePnlUsd": null,
+    "hourlyAverageTrades": 1.0,
     "realizedPnlUsd": 0,
     "totalTransactionVolumeUsd": 100.0,
     "executedTradeCount": 1,
@@ -24,13 +30,14 @@
       "reason": "Too early for the intended BTC 15m entry window.",
       "timeRemainingMin": 13.28,
       "expectedEdgeCents": null
-    }
+    },
+    "latestState": null
   },
   "assumptions": [
-    "PnL is realized-only: the dashboard sums numeric `pnl` values from `btc15m_executed_trades.jsonl` and excludes null/unknown values.",
+    "Current capital uses `artifacts/btc15m_risk_state.json` when present; otherwise it falls back to initial capital plus realized PnL.",
+    "Overall PnL is realized-only: numeric `pnl` values from `btc15m_executed_trades.jsonl` are summed, while null/unknown values remain open/unrealized.",
+    "Hourly average PnL is realized PnL divided by observed realized-trade time span in hours, floored at 1 hour to avoid noisy division.",
     "Transaction volume uses `raw_response.stake_usd` when present; otherwise it falls back to `filled_size * limit_price / 100`.",
-    "Trades with null `pnl` and null `exit_price` are labeled OPEN; everything else is treated as CLOSED for UI purposes.",
-    "Decision context is sourced from `btc15m_candidate_decisions.jsonl`; it is informational and separate from executed trade accounting.",
     "The payload is a static snapshot generated at build time, so Vercel serves the last exported artifact state rather than reading live logs at runtime."
   ],
   "trades": [

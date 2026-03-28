@@ -61,27 +61,27 @@ function setRefreshStatus(message, tone = 'muted') {
 function renderKpis(summary) {
   const items = [
     {
-      label: 'Realized PnL',
-      value: formatUsd(summary.realizedPnlUsd, { signed: true }),
+      label: 'Current capital',
+      value: formatUsd(summary.currentCapitalUsd),
+      footnote: 'Latest capital snapshot from risk state or realized fallback',
+      className: ''
+    },
+    {
+      label: 'Overall PnL',
+      value: formatUsd(summary.overallPnlUsd, { signed: true }),
       footnote: `${summary.tradesWithRealizedPnl} trades with closed/known PnL`,
-      className: summary.realizedPnlUsd > 0 ? 'pos' : summary.realizedPnlUsd < 0 ? 'neg' : ''
+      className: summary.overallPnlUsd > 0 ? 'pos' : summary.overallPnlUsd < 0 ? 'neg' : ''
     },
     {
-      label: 'Transaction volume',
-      value: formatUsd(summary.totalTransactionVolumeUsd),
-      footnote: `${summary.executedTradeCount} executed trades logged`,
-      className: ''
+      label: 'Hourly avg PnL',
+      value: formatUsd(summary.hourlyAveragePnlUsd, { signed: true }),
+      footnote: `Hourly avg trades: ${formatNumber(summary.hourlyAverageTrades, 2)}`,
+      className: summary.hourlyAveragePnlUsd > 0 ? 'pos' : summary.hourlyAveragePnlUsd < 0 ? 'neg' : ''
     },
     {
-      label: 'Open positions',
-      value: formatNumber(summary.openTradeCount),
-      footnote: `${summary.closedTradeCount} closed / resolved`,
-      className: ''
-    },
-    {
-      label: 'Last decision',
-      value: summary.lastDecision?.decision || 'No decisions',
-      footnote: summary.lastDecision ? `${summary.lastDecision.side} • confidence ${summary.lastDecision.confidence}` : 'No BTC15 decision logs yet',
+      label: 'All trades logged',
+      value: formatNumber(summary.executedTradeCount),
+      footnote: `${summary.openTradeCount} open • ${summary.closedTradeCount} closed`,
       className: ''
     }
   ];
