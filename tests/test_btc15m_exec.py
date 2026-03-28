@@ -51,14 +51,6 @@ def test_btc15m_abstains_when_too_close_to_close():
     assert "final 3-minute" in decision.reason.lower()
 
 
-def test_btc15m_abstains_when_too_early_for_window():
-    agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, max_time_to_close_min=12.0))
-    snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=13))
-    decision = agent.evaluate(snapshot, RiskState())
-    assert decision.decision == "NO TRADE"
-    assert "first 3-minute" in decision.reason.lower()
-
-
 def test_btc15m_estimate_trade_ev_prefers_positive_yes_entry():
     agent = BTC15mExecutionAgent(BTC15mExecConfig(enabled=True, min_ev_to_trade_cents=0.2))
     ev = agent.estimate_trade_ev(make_snapshot(), RiskState())

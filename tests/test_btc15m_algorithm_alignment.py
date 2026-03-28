@@ -49,13 +49,6 @@ def make_snapshot(**overrides):
     return BTC15mMarketSnapshot(**base)
 
 
-def test_algorithm_blocks_first_three_minute_region():
-    agent = BTC15mExecutionAgent(MID_CFG)
-    decision = agent.evaluate(make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=13)), RiskState())
-    assert decision.decision == "NO TRADE"
-    assert "first 3-minute" in decision.reason.lower()
-
-
 def test_algorithm_blocks_final_three_minute_region():
     agent = BTC15mExecutionAgent(MID_CFG)
     decision = agent.evaluate(make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=2, seconds=30)), RiskState())

@@ -218,8 +218,6 @@ class BTC15mExecutionAgent:
             return f"Market status is {snapshot.status!r}, not open/tradable."
         if mins_left <= self.cfg.min_time_to_close_min:
             return "Too close to resolution; no-entry final 3-minute window."
-        if mins_left > self.cfg.max_time_to_close_min:
-            return "Too early for the intended BTC 15m entry window; no-entry first 3-minute window."
         if snapshot.spread_cents > self.cfg.max_spread_cents:
             return "Spread too wide for controlled entry."
         if snapshot.min_depth < self.cfg.min_depth_contracts:
