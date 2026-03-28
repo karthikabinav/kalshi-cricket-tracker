@@ -79,6 +79,8 @@ class TradingConfig(BaseModel):
 
 class BTC15mExecConfig(BaseModel):
     enabled: bool = False
+    maker_fee_bps: float = 10.0
+    taker_fee_bps: float = 10.0
     min_time_to_close_min: float = 20.0 / 60.0
     max_time_to_close_min: float = 120.0 / 60.0
     min_depth_contracts: int = 25
