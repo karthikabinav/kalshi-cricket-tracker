@@ -48,13 +48,14 @@ class MockKalshiPaperClient(KalshiClientInterface):
         self.list_markets_response = list_markets_response or {"markets": list(self.market_map.values())}
 
     def place_order(self, order: KalshiOrder) -> dict:
+        count = max(1, int(order.stake_usd / max(order.limit_price, 0.01)))
         rec = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event_ticker": order.event_ticker,
             "side": order.side,
             "stake_usd": order.stake_usd,
             "limit_price": order.limit_price,
-            "count": 1,
+            "count": count,
             "status": "PAPER_FILLED",
         }
         self.orders.append(rec)

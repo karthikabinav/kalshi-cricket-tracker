@@ -603,9 +603,9 @@ class BTC15mExecutionAgent:
             return next_state
 
         action = decision.action
-        cost_usd = (decision.cost_cents or 0.0) / 100.0
-        reward_usd = (decision.reward_cents or 0.0) / 100.0
-        fee_usd = (decision.fee_cents or 0.0) / 100.0
+        cost_usd = qty * (decision.cost_cents or 0.0) / 100.0
+        reward_usd = qty * (decision.reward_cents or 0.0) / 100.0
+        fee_usd = qty * (decision.fee_cents or 0.0) / 100.0
 
         if action.startswith("buy_yes") or action == "enter_long_yes":
             next_state.inventory_state = "LONG_YES"
