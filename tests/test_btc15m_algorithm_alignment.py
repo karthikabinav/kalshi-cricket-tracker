@@ -110,6 +110,14 @@ def test_algorithm_exits_open_position_when_signal_turns_negative():
     assert action == "EXIT"
 
 
+def test_algorithm_no_trade_does_not_log_executable_buy_action_when_blocked():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True})
+    agent = BTC15mExecutionAgent(cfg)
+    decision = agent.evaluate(make_snapshot(orderbook_stability_bps=500), RiskState())
+    assert decision.decision == "NO TRADE"
+    assert decision.action in {"skip", "hold"}
+
+
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
     cfg = MID_CFG.model_copy(update={"candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
     agent = BTC15mExecutionAgent(cfg)

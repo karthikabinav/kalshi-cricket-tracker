@@ -467,8 +467,11 @@ class BTC15mExecutionAgent:
         if self.cfg.vol_bwk_enabled:
             next_inventory = bwk_info.get("bwk_next_state", risk.inventory_state)
             resulting_capital = risk.current_capital_usd - max(0.0, (bwk_info.get("bwk_cost_cents") or 0.0) / 100.0)
+            visible_action = bwk_info.get("bwk_action", "skip")
+            if blocked_reason is not None:
+                visible_action = "hold" if snapshot.current_position_side or risk.inventory_state != "FLAT" else "skip"
             extra = {
-                "action": bwk_info.get("bwk_action", "skip"),
+                "action": visible_action,
                 "quantity": qty,
                 "reward_cents": bwk_info.get("bwk_reward_cents"),
                 "cost_cents": bwk_info.get("bwk_cost_cents"),
