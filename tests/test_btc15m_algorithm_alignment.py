@@ -142,3 +142,40 @@ def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
     assert (tmp_path / cfg.state_log_jsonl).exists()
     saved_risk = json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8"))
     assert "current_capital_usd" in saved_risk
+
+
+def test_sell_trade_logs_realized_pnl(tmp_path):
+    from kalshi_cricket_tracker.execution.btc15m import CandidateDecision
+
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_NO", inventory_qty=1, entry_price_cents=18.0, reserved_capital_usd=0.18)
+    decision = CandidateDecision(
+        decision="NO TRADE",
+        ticker="KXBTC15M-TEST-15",
+        side="NONE",
+        confidence=20,
+        reason="Exit preferred.",
+        time_remaining_min=8.0,
+        orderbook_summary={"no_bid": 20, "yes_bid": 80},
+        planned_entry_cents=None,
+        planned_profit_take_cents=None,
+        invalidation="Abstain",
+        expected_edge_cents=None,
+        action="sell_no",
+        quantity=1,
+        reward_cents=0.0,
+        cost_cents=0.0,
+        lagrangian_score=0.1,
+        fee_cents=0.018,
+        resulting_capital_usd=100.0,
+        realized_round_trip_pnl_usd=0.0,
+        unrealized_pnl_usd=0.0,
+        inventory_state_after="FLAT",
+        state_context={},
+    )
+    agent.execute_candidate(decision, MockKalshiPaperClient(), tmp_path, live_enabled=False, risk=risk, persist_state_path=tmp_path / cfg.risk_state_json)
+    trades = [json.loads(line) for line in (tmp_path / cfg.executed_log_jsonl).read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(trades) == 1
+    assert trades[-1]["action"] == "sell_no"
+    assert trades[-1]["pnl"] is not None

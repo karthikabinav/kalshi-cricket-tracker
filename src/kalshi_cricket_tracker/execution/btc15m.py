@@ -663,12 +663,14 @@ class BTC15mExecutionAgent:
         next_state = self.apply_execution_to_risk(decision, state, fill_count=int(response.get("count", decision.quantity or 1)))
         if persist_state_path is not None:
             save_risk_state(persist_state_path, next_state)
+        realized_delta = round(next_state.realized_round_trip_pnl_usd - state.realized_round_trip_pnl_usd, 6)
+        exit_price = limit_cents if decision.action in {"sell_yes", "sell_no"} else None
         trade_log = {
             "entry_time": datetime.now(timezone.utc).isoformat(),
             "ticker": decision.ticker,
-            "side": decision.side,
+            "side": order_side,
             "action": decision.action,
-            "limit_price": decision.planned_entry_cents,
+            "limit_price": limit_cents,
             "filled_size": response.get("count", 1),
             "reward_cents": decision.reward_cents,
             "cost_cents": decision.cost_cents,
@@ -679,8 +681,8 @@ class BTC15mExecutionAgent:
             "unrealized_pnl_usd": next_state.unrealized_pnl_usd,
             "inventory_state_after": next_state.inventory_state,
             "fill_quality": response.get("status", "PAPER_PLACED" if not live_enabled else "LIVE_SENT"),
-            "exit_price": None,
-            "pnl": None,
+            "exit_price": exit_price,
+            "pnl": realized_delta if decision.action in {"sell_yes", "sell_no"} else None,
             "classification": "paper_trade" if not live_enabled else "pending_review",
             "raw_response": response,
         }
