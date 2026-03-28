@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 import pandas as pd
 import typer
@@ -10,7 +11,14 @@ from rich import print
 from kalshi_cricket_tracker.api.pipeline import ensure_artifacts_dir, ingest_and_engineer
 from kalshi_cricket_tracker.backtest.engine import run_backtest
 from kalshi_cricket_tracker.config import load_config
-from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, load_risk_state, load_snapshot
+from kalshi_cricket_tracker.execution.btc15m import (
+    BTC15mExecutionAgent,
+    fetch_live_snapshot,
+    load_risk_state,
+    load_snapshot,
+    load_snapshot_sequence,
+    save_risk_state,
+)
 from kalshi_cricket_tracker.execution.guards import validate_trading_mode
 from kalshi_cricket_tracker.execution.kalshi import KalshiOrder, KalshiRestClient, MockKalshiPaperClient
 from kalshi_cricket_tracker.strategy.contextual_bandit import run_bandit_backtest
@@ -22,8 +30,8 @@ from kalshi_cricket_tracker.strategy.copula_sim import (
     simulate_independent_outcomes,
     simulate_t_outcomes,
 )
-from kalshi_cricket_tracker.strategy.risk import apply_risk
 from kalshi_cricket_tracker.strategy.live_arb import ArbConfig, backtest_from_snapshots
+from kalshi_cricket_tracker.strategy.risk import apply_risk
 
 app = typer.Typer(help="Kalshi Cricket Tracker CLI")
 
@@ -171,14 +179,146 @@ def btc15m_exec(
     cfg = load_config(config)
     art = ensure_artifacts_dir(cfg)
     snapshot = load_snapshot(snapshot_json)
-    risk = load_risk_state(risk_json)
+    risk_path = Path(risk_json) if risk_json else art / cfg.btc15m.risk_state_json
+    risk = load_risk_state(risk_path)
+    if risk.updated_at is None and risk.current_capital_usd == 100.0:
+        risk.current_capital_usd = cfg.btc15m.initial_capital_usd
     agent = BTC15mExecutionAgent(cfg.btc15m)
     decision = agent.evaluate(snapshot, risk)
 
     validate_trading_mode(cfg.trading)
     client = KalshiRestClient.from_env(cfg.trading) if cfg.trading.mode == "live" else MockKalshiPaperClient()
-    agent.execute_candidate(decision, client=client, log_dir=art, live_enabled=cfg.trading.mode == "live")
+    agent.execute_candidate(decision, client=client, log_dir=art, live_enabled=cfg.trading.mode == "live", risk=risk, persist_state_path=risk_path)
     print(decision.render())
+
+
+@app.command("btc15m-fetch-live-snapshot")
+def btc15m_fetch_live_snapshot(
+    ticker: str | None = typer.Option(None, help="Optional explicit BTC15m ticker; default discovers the nearest open one"),
+    thesis_price_cents: int | None = typer.Option(None, help="Optional internal fair value in cents for YES"),
+    btc_spot: float | None = typer.Option(None, help="Optional BTC spot reference to carry into metadata"),
+    out: str | None = typer.Option(None, help="Optional output path; default writes into artifacts/"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    client = KalshiRestClient.public(cfg.trading)
+    try:
+        snapshot = fetch_live_snapshot(client, ticker=ticker, thesis_price_cents=thesis_price_cents, btc_spot=btc_spot)
+    except RuntimeError as exc:
+        print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit(code=1)
+    payload = {
+        "ticker": snapshot.ticker,
+        "rules": snapshot.rules,
+        "status": snapshot.status,
+        "close_time": snapshot.close_time.isoformat(),
+        "yes_ask_cents": snapshot.yes_ask_cents,
+        "yes_bid_cents": snapshot.yes_bid_cents,
+        "no_ask_cents": snapshot.no_ask_cents,
+        "no_bid_cents": snapshot.no_bid_cents,
+        "best_yes_ask_size": snapshot.best_yes_ask_size,
+        "best_yes_bid_size": snapshot.best_yes_bid_size,
+        "best_no_ask_size": snapshot.best_no_ask_size,
+        "best_no_bid_size": snapshot.best_no_bid_size,
+        "orderbook_stability_bps": snapshot.orderbook_stability_bps,
+        "btc_spot": snapshot.btc_spot,
+        "thesis_price_cents": snapshot.thesis_price_cents,
+        "metadata": snapshot.metadata,
+    }
+    out_path = Path(out) if out else art / f"{snapshot.ticker}_snapshot.json"
+    out_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    print(f"[green]Saved live snapshot to {out_path}[/green]")
+    print(json.dumps({"ticker": snapshot.ticker, "close_time": snapshot.close_time.isoformat(), "spread_cents": snapshot.spread_cents, "min_depth": snapshot.min_depth}, indent=2))
+
+
+@app.command("btc15m-paper-live")
+def btc15m_paper_live(
+    thesis_price_cents: int = typer.Option(..., help="Internal fair value in cents for YES; required for decisioning"),
+    ticker: str | None = typer.Option(None, help="Optional explicit BTC15m ticker; default discovers nearest open one"),
+    risk_json: str | None = typer.Option(None, help="Optional path to risk state JSON"),
+    btc_spot: float | None = typer.Option(None, help="Optional BTC spot reference"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    try:
+        snapshot = fetch_live_snapshot(KalshiRestClient.public(cfg.trading), ticker=ticker, thesis_price_cents=thesis_price_cents, btc_spot=btc_spot)
+    except RuntimeError as exc:
+        print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit(code=1)
+    risk_path = Path(risk_json) if risk_json else art / cfg.btc15m.risk_state_json
+    risk = load_risk_state(risk_path)
+    if risk.updated_at is None and risk.current_capital_usd == 100.0:
+        risk.current_capital_usd = cfg.btc15m.initial_capital_usd
+    agent = BTC15mExecutionAgent(cfg.btc15m)
+    decision = agent.evaluate(snapshot, risk)
+    agent.execute_candidate(decision, client=MockKalshiPaperClient(), log_dir=art, live_enabled=False, risk=risk, persist_state_path=risk_path)
+    print(decision.render())
+
+
+@app.command("btc15m-paper-watch")
+def btc15m_paper_watch(
+    thesis_price_cents: int = typer.Option(..., help="Internal fair value in cents for YES; required for decisioning"),
+    ticker: str | None = typer.Option(None, help="Optional explicit event/market ticker to monitor"),
+    risk_json: str | None = typer.Option(None, help="Optional path to risk state JSON"),
+    btc_spot: float | None = typer.Option(None, help="Optional BTC spot reference"),
+    poll_seconds: int = typer.Option(30, help="Polling interval in seconds"),
+    max_polls: int = typer.Option(40, help="Maximum polls before exiting"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    client = KalshiRestClient.public(cfg.trading)
+    last_ticker = None
+    for _ in range(max_polls):
+        try:
+            snapshot = fetch_live_snapshot(client, ticker=ticker, thesis_price_cents=thesis_price_cents, btc_spot=btc_spot)
+        except RuntimeError as exc:
+            print(f"[yellow]{exc}[/yellow]")
+            time.sleep(max(5, poll_seconds))
+            continue
+        if snapshot.ticker != last_ticker:
+            risk_path = Path(risk_json) if risk_json else art / cfg.btc15m.risk_state_json
+            risk = load_risk_state(risk_path)
+            if risk.updated_at is None and risk.current_capital_usd == 100.0:
+                risk.current_capital_usd = cfg.btc15m.initial_capital_usd
+            agent = BTC15mExecutionAgent(cfg.btc15m)
+            decision = agent.evaluate(snapshot, risk)
+            agent.execute_candidate(decision, client=MockKalshiPaperClient(), log_dir=art, live_enabled=False, risk=risk, persist_state_path=risk_path)
+            print(decision.render())
+            last_ticker = snapshot.ticker
+            return
+        time.sleep(max(5, poll_seconds))
+    print("[yellow]Watcher exited without finding a new BTC15m market.[/yellow]")
+    raise typer.Exit(code=1)
+
+
+@app.command()
+@app.command("btc15m-replay")
+def btc15m_replay(
+    snapshots_json: str = typer.Option(..., help="Path to JSON/JSONL snapshot sequence"),
+    risk_json: str | None = typer.Option(None, help="Optional starting/ending risk state path"),
+    config: str = "configs/default.yaml",
+):
+    cfg = load_config(config)
+    art = ensure_artifacts_dir(cfg)
+    risk_path = Path(risk_json) if risk_json else art / cfg.btc15m.risk_state_json
+    risk = load_risk_state(risk_path)
+    if risk.updated_at is None and risk.current_capital_usd == 100.0:
+        risk.current_capital_usd = cfg.btc15m.initial_capital_usd
+    agent = BTC15mExecutionAgent(cfg.btc15m)
+    client = MockKalshiPaperClient()
+    for snapshot in load_snapshot_sequence(snapshots_json):
+        decision = agent.evaluate(snapshot, risk)
+        agent.execute_candidate(decision, client=client, log_dir=art, live_enabled=False, risk=risk, persist_state_path=risk_path)
+        risk = load_risk_state(risk_path)
+    print(json.dumps({
+        "snapshots_processed": len(load_snapshot_sequence(snapshots_json)),
+        "ending_capital_usd": risk.current_capital_usd,
+        "realized_round_trip_pnl_usd": risk.realized_round_trip_pnl_usd,
+        "inventory_state": risk.inventory_state,
+    }, indent=2))
 
 
 @app.command()

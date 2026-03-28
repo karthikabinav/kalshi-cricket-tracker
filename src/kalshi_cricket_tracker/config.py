@@ -79,6 +79,10 @@ class TradingConfig(BaseModel):
 
 class BTC15mExecConfig(BaseModel):
     enabled: bool = False
+    vol_bwk_enabled: bool = False
+    paper_only_vol_bwk: bool = True
+    initial_capital_usd: float = 100.0
+    recycle_released_capital: bool = True
     maker_fee_bps: float = 10.0
     taker_fee_bps: float = 10.0
     min_time_to_close_min: float = 20.0 / 60.0
@@ -104,8 +108,12 @@ class BTC15mExecConfig(BaseModel):
     stop_loss_cents: int = 3
     size_kelly_fraction: float = 0.1
     min_ev_to_trade_cents: float = 0.5
+    bwk_lambda_cost: float = 0.02
+    bwk_expected_recovery_cents: float = 1.5
+    risk_state_json: str = "btc15m_risk_state.json"
     candidate_log_jsonl: str = "btc15m_candidate_decisions.jsonl"
     executed_log_jsonl: str = "btc15m_executed_trades.jsonl"
+    state_log_jsonl: str = "btc15m_state_trace.jsonl"
 
 
 class AppConfig(BaseModel):

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from kalshi_cricket_tracker.config import BTC15mExecConfig
 from kalshi_cricket_tracker.execution.kalshi import KalshiClientInterface, KalshiOrder
+from kalshi_cricket_tracker.strategy.btc15m_vol_bwk import FeeSchedule, Position, VolBanditsWithKnapsackPolicy, VolSnapshot
 
 
 @dataclass
@@ -40,6 +41,9 @@ class BTC15mMarketSnapshot:
     recent_trades_count: int | None = None
     recent_trade_buy_ratio: float | None = None
     settlement_signal_strength: float | None = None
+    local_mean_reversion_zscore: float | None = None
+    snapshot_sequence_id: str | None = None
+    snapshot_index: int | None = None
     current_position_side: Literal["YES", "NO"] | None = None
     current_position_entry_cents: int | None = None
     metadata: dict[str, Any] | None = None
@@ -101,6 +105,9 @@ class BTC15mMarketSnapshot:
             recent_trades_count=int(raw["recent_trades_count"]) if raw.get("recent_trades_count") is not None else None,
             recent_trade_buy_ratio=float(raw["recent_trade_buy_ratio"]) if raw.get("recent_trade_buy_ratio") is not None else None,
             settlement_signal_strength=float(raw["settlement_signal_strength"]) if raw.get("settlement_signal_strength") is not None else None,
+            local_mean_reversion_zscore=float(raw["local_mean_reversion_zscore"]) if raw.get("local_mean_reversion_zscore") is not None else None,
+            snapshot_sequence_id=raw.get("snapshot_sequence_id"),
+            snapshot_index=int(raw["snapshot_index"]) if raw.get("snapshot_index") is not None else None,
             current_position_side=raw.get("current_position_side"),
             current_position_entry_cents=int(raw["current_position_entry_cents"]) if raw.get("current_position_entry_cents") is not None else None,
             metadata=raw.get("metadata"),
@@ -114,6 +121,20 @@ class RiskState:
     trades_last_hour: int = 0
     open_positions: int = 0
     two_consecutive_bad_slippage: bool = False
+    current_capital_usd: float = 100.0
+    reserved_capital_usd: float = 0.0
+    recycled_capital_usd: float = 0.0
+    inventory_state: Literal["FLAT", "LONG_YES", "LONG_NO"] = "FLAT"
+    inventory_qty: int = 0
+    entry_price_cents: float | None = None
+    entry_notional_usd: float = 0.0
+    realized_round_trip_pnl_usd: float = 0.0
+    unrealized_pnl_usd: float = 0.0
+    last_ticker: str | None = None
+    updated_at: str | None = None
+
+    def position(self) -> Position:
+        return Position(state=self.inventory_state, qty=self.inventory_qty, entry_cents=self.entry_price_cents)
 
 
 @dataclass
@@ -143,6 +164,17 @@ class CandidateDecision:
     planned_profit_take_cents: int | None
     invalidation: str
     expected_edge_cents: int | None
+    action: str = "skip"
+    quantity: int = 0
+    reward_cents: float | None = None
+    cost_cents: float | None = None
+    lagrangian_score: float | None = None
+    fee_cents: float | None = None
+    resulting_capital_usd: float | None = None
+    realized_round_trip_pnl_usd: float | None = None
+    unrealized_pnl_usd: float | None = None
+    inventory_state_after: str | None = None
+    state_context: dict[str, Any] = field(default_factory=dict)
 
     def render(self) -> str:
         if self.decision == "NO TRADE":
@@ -151,8 +183,9 @@ class CandidateDecision:
             f"TRADE\n"
             f"Ticker: {self.ticker}\n"
             f"Side: {self.side}\n"
+            f"Action: {self.action}\n"
             f"Entry limit: {self.planned_entry_cents}\n"
-            f"Size: 1\n"
+            f"Size: {self.quantity or 1}\n"
             f"Profit-take plan: Exit if price improves to {self.planned_profit_take_cents}c or earlier if thesis/clock weakens\n"
             f"Invalidation / stop: {self.invalidation}\n"
             f"Why now: {self.reason}\n"
@@ -163,6 +196,9 @@ class CandidateDecision:
 class BTC15mExecutionAgent:
     def __init__(self, cfg: BTC15mExecConfig):
         self.cfg = cfg
+        self.bwk_policy = VolBanditsWithKnapsackPolicy(
+            FeeSchedule(maker_fee_bps=cfg.maker_fee_bps, taker_fee_bps=cfg.taker_fee_bps)
+        )
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
@@ -190,7 +226,7 @@ class BTC15mExecutionAgent:
             return "Insufficient top-of-book depth."
         if snapshot.orderbook_stability_bps > self.cfg.max_orderbook_instability_bps:
             return "Order book is unstable / repricing too fast."
-        if risk.open_positions >= self.cfg.max_simultaneous_positions and snapshot.current_position_side is None:
+        if risk.open_positions >= self.cfg.max_simultaneous_positions and snapshot.current_position_side is None and risk.inventory_state == "FLAT":
             return "Max simultaneous position limit already reached."
         if risk.daily_realized_pnl_usd <= -abs(self.cfg.max_daily_loss_usd):
             return "Daily loss limit already hit."
@@ -202,7 +238,7 @@ class BTC15mExecutionAgent:
             return "Recent slippage stop triggered."
         return None
 
-    def estimate_trade_ev(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> EVEstimate:
+    def _estimate_standard_ev(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> EVEstimate:
         blocked_reason = self._check_tradeable(snapshot, risk)
         mins_left = max(0.0, snapshot.time_remaining.total_seconds() / 60.0)
         yes_mid = snapshot.contract_price_cents
@@ -274,10 +310,96 @@ class BTC15mExecutionAgent:
             recommended_action=action,
         )
 
+    def _to_vol_snapshot(self, snapshot: BTC15mMarketSnapshot) -> VolSnapshot:
+        contract_mid = snapshot.contract_price_cents
+        thesis = snapshot.thesis_price_cents if snapshot.thesis_price_cents is not None else int(round(contract_mid))
+        mean_reversion_z = snapshot.local_mean_reversion_zscore
+        if mean_reversion_z is None and snapshot.distance_from_target_cents is not None:
+            mean_reversion_z = self._clamp(-snapshot.distance_from_target_cents / max(snapshot.spread_cents, 1), -3.0, 3.0)
+        return VolSnapshot(
+            yes_bid_cents=snapshot.yes_bid_cents,
+            yes_ask_cents=snapshot.yes_ask_cents,
+            no_bid_cents=snapshot.no_bid_cents,
+            no_ask_cents=snapshot.no_ask_cents,
+            spread_cents=snapshot.spread_cents,
+            depth_contracts=snapshot.min_depth,
+            time_remaining_min=max(0.0, snapshot.time_remaining.total_seconds() / 60.0),
+            distance_from_target_cents=float(thesis - contract_mid),
+            microprice_cents=snapshot.microprice_cents,
+            orderbook_imbalance=snapshot.orderbook_imbalance,
+            recent_trade_buy_ratio=snapshot.recent_trade_buy_ratio,
+            realized_vol_bps=snapshot.realized_vol_bps,
+            local_mean_reversion_zscore=mean_reversion_z,
+        )
+
+    def _capital_remaining(self, risk: RiskState) -> float:
+        return max(0.0, risk.current_capital_usd - risk.reserved_capital_usd)
+
+    def _evaluate_vol_bwk(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
+        position = risk.position()
+        vol_snapshot = self._to_vol_snapshot(snapshot)
+        evaluation = self.bwk_policy.choose_action(
+            position=position,
+            snapshot=vol_snapshot,
+            lambda_cost=self.cfg.bwk_lambda_cost,
+            budget_remaining=self._capital_remaining(risk) * 100.0,
+            expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
+        )
+        size = position.qty or self.bwk_policy.entry_qty
+        unrealized_cents = self.bwk_policy.mark_to_market(position, vol_snapshot)
+        gross_edge = evaluation.reward if evaluation.action not in {"hold", "hold_position", "skip"} else unrealized_cents
+        fees = evaluation.fee_load
+        net_ev = evaluation.lagrangian_score
+        if evaluation.action.startswith("buy_yes"):
+            rec_action = "ENTER_LONG_YES"
+            fair_prob = min(0.99, max(0.01, (snapshot.yes_ask_cents + max(evaluation.reward, 0.0)) / 100.0))
+        elif evaluation.action.startswith("buy_no"):
+            rec_action = "ENTER_LONG_NO"
+            fair_prob = min(0.99, max(0.01, 1.0 - (snapshot.no_ask_cents + max(evaluation.reward, 0.0)) / 100.0))
+        elif evaluation.action in {"sell_yes", "sell_no"}:
+            rec_action = "EXIT"
+            fair_prob = snapshot.contract_price_cents / 100.0
+        elif evaluation.action == "hold_position":
+            rec_action = "HOLD"
+            fair_prob = snapshot.contract_price_cents / 100.0
+        else:
+            rec_action = "SKIP"
+            fair_prob = snapshot.contract_price_cents / 100.0
+        est = EVEstimate(
+            fair_prob=round(fair_prob, 4),
+            tp_hit_prob=0.5,
+            stop_hit_prob=0.25,
+            expected_settlement_value=round(snapshot.contract_price_cents, 3),
+            gross_edge=round(gross_edge, 3),
+            fees=round(fees, 3),
+            slippage=0.0,
+            net_ev=round(net_ev, 3),
+            recommended_size=size,
+            recommended_action=rec_action,
+        )
+        return est, {
+            "bwk_action": evaluation.action,
+            "bwk_reward_cents": evaluation.reward,
+            "bwk_cost_cents": evaluation.cost,
+            "bwk_lagrangian_score": evaluation.lagrangian_score,
+            "bwk_fee_cents": evaluation.fee_load,
+            "bwk_next_state": evaluation.next_state,
+            "bwk_rationale": evaluation.rationale,
+            "unrealized_cents": unrealized_cents,
+        }
+
+    def estimate_trade_ev(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> EVEstimate:
+        if self.cfg.vol_bwk_enabled:
+            est, _ = self._evaluate_vol_bwk(snapshot, risk)
+            return est
+        return self._estimate_standard_ev(snapshot, risk)
+
     def decide_trade(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> Literal["ENTER_LONG_YES", "ENTER_LONG_NO", "HOLD", "EXIT", "SKIP"]:
         return self.estimate_trade_ev(snapshot, risk).recommended_action
 
     def evaluate(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> CandidateDecision:
+        snapshot.current_position_side = snapshot.current_position_side or ({"LONG_YES": "YES", "LONG_NO": "NO"}.get(risk.inventory_state))
+        snapshot.current_position_entry_cents = snapshot.current_position_entry_cents or (int(risk.entry_price_cents) if risk.entry_price_cents is not None else None)
         summary = {
             "yes_bid": snapshot.yes_bid_cents,
             "yes_ask": snapshot.yes_ask_cents,
@@ -294,10 +416,15 @@ class BTC15mExecutionAgent:
             "recent_trades_count": snapshot.recent_trades_count,
             "recent_trade_buy_ratio": snapshot.recent_trade_buy_ratio,
             "settlement_signal_strength": snapshot.settlement_signal_strength,
+            "inventory_state": risk.inventory_state,
+            "inventory_qty": risk.inventory_qty,
+            "entry_price_cents": risk.entry_price_cents,
+            "capital_remaining_usd": round(self._capital_remaining(risk), 4),
         }
         mins_left = snapshot.time_remaining.total_seconds() / 60.0
 
-        def abstain(reason: str, confidence: int = 0) -> CandidateDecision:
+        def abstain(reason: str, confidence: int = 0, extra: dict[str, Any] | None = None) -> CandidateDecision:
+            payload = extra or {}
             return CandidateDecision(
                 decision="NO TRADE",
                 ticker=snapshot.ticker,
@@ -310,30 +437,77 @@ class BTC15mExecutionAgent:
                 planned_profit_take_cents=None,
                 invalidation="Abstain",
                 expected_edge_cents=None,
+                action=payload.get("action", "skip"),
+                quantity=payload.get("quantity", 0),
+                reward_cents=payload.get("reward_cents"),
+                cost_cents=payload.get("cost_cents"),
+                lagrangian_score=payload.get("lagrangian_score"),
+                fee_cents=payload.get("fee_cents"),
+                resulting_capital_usd=payload.get("resulting_capital_usd"),
+                realized_round_trip_pnl_usd=payload.get("realized_round_trip_pnl_usd"),
+                unrealized_pnl_usd=payload.get("unrealized_pnl_usd"),
+                inventory_state_after=payload.get("inventory_state_after"),
+                state_context=payload,
             )
 
         blocked_reason = self._check_tradeable(snapshot, risk)
+        bwk_info: dict[str, Any] = {}
         ev = self.estimate_trade_ev(snapshot, risk)
+        if self.cfg.vol_bwk_enabled:
+            ev, bwk_info = self._evaluate_vol_bwk(snapshot, risk)
         action = ev.recommended_action
         dominant_bid = max(snapshot.yes_bid_cents, snapshot.no_bid_cents)
-        if blocked_reason is None and snapshot.current_position_side is None and dominant_bid < self.cfg.dominant_side_min_cents:
+        if blocked_reason is None and snapshot.current_position_side is None and dominant_bid < self.cfg.dominant_side_min_cents and not self.cfg.vol_bwk_enabled:
             blocked_reason = f"Dominant side bid {dominant_bid}c is below {self.cfg.dominant_side_min_cents}c trigger."
         confidence = int(self._clamp(100.0 * max(0.0, ev.net_ev + self.cfg.safety_buffer_cents) / 8.0, 0.0, 100.0))
         side = "YES" if action == "ENTER_LONG_YES" else "NO" if action == "ENTER_LONG_NO" else "NONE"
         entry = snapshot.yes_ask_cents if side == "YES" else snapshot.no_ask_cents if side == "NO" else None
 
+        qty = risk.inventory_qty or ev.recommended_size or 1
+        if self.cfg.vol_bwk_enabled:
+            next_inventory = bwk_info.get("bwk_next_state", risk.inventory_state)
+            resulting_capital = risk.current_capital_usd - max(0.0, (bwk_info.get("bwk_cost_cents") or 0.0) / 100.0)
+            extra = {
+                "action": bwk_info.get("bwk_action", "skip"),
+                "quantity": qty,
+                "reward_cents": bwk_info.get("bwk_reward_cents"),
+                "cost_cents": bwk_info.get("bwk_cost_cents"),
+                "lagrangian_score": bwk_info.get("bwk_lagrangian_score"),
+                "fee_cents": bwk_info.get("bwk_fee_cents"),
+                "resulting_capital_usd": round(resulting_capital, 4),
+                "realized_round_trip_pnl_usd": round(risk.realized_round_trip_pnl_usd, 4),
+                "unrealized_pnl_usd": round((bwk_info.get("unrealized_cents") or 0.0) / 100.0, 4),
+                "inventory_state_after": next_inventory,
+                **bwk_info,
+            }
+        else:
+            extra = {
+                "action": action.lower(),
+                "quantity": ev.recommended_size,
+                "reward_cents": round(ev.gross_edge, 4),
+                "cost_cents": round(ev.fees + ev.slippage, 4),
+                "lagrangian_score": round(ev.net_ev, 4),
+                "fee_cents": round(ev.fees, 4),
+                "resulting_capital_usd": round(risk.current_capital_usd, 4),
+                "realized_round_trip_pnl_usd": round(risk.realized_round_trip_pnl_usd, 4),
+                "unrealized_pnl_usd": round(risk.unrealized_pnl_usd, 4),
+                "inventory_state_after": risk.inventory_state,
+            }
+
         if blocked_reason is not None:
-            return abstain(blocked_reason, confidence=confidence)
+            return abstain(blocked_reason, confidence=confidence, extra=extra)
         if action not in {"ENTER_LONG_YES", "ENTER_LONG_NO"}:
             if action == "EXIT":
-                return abstain("Open-position EV turned negative or timing/rule checks deteriorated; exit is preferred.", confidence=confidence)
-            return abstain("Net EV after fees, slippage, and safety buffer is not strong enough to trade.", confidence=confidence)
+                return abstain("Open-position EV turned negative or timing/rule checks deteriorated; exit is preferred.", confidence=confidence, extra=extra)
+            return abstain("Net EV after fees, slippage, and safety buffer is not strong enough to trade.", confidence=confidence, extra=extra)
 
         planned_profit = min(99, int(entry or 0) + self.cfg.target_take_profit_cents)
         reason = (
             f"{side} has positive net EV ({ev.net_ev:.2f}c) after fees/slippage, fair value {ev.expected_settlement_value:.1f}c, "
             f"spread {snapshot.spread_cents}c, depth {snapshot.min_depth}, and time-to-cutoff {mins_left:.2f}m."
         )
+        if self.cfg.vol_bwk_enabled:
+            reason = f"BwK paper action {extra['action']} selected with score {extra['lagrangian_score']:.2f}; {bwk_info.get('bwk_rationale', 'fee-aware mean-reversion setup')}"
         invalidation = (
             f"Exit/avoid if recomputed EV drops below 0c, spread widens above {self.cfg.max_spread_cents}c, "
             f"or time remaining leaves the allowed window."
@@ -350,7 +524,72 @@ class BTC15mExecutionAgent:
             planned_profit_take_cents=planned_profit,
             invalidation=invalidation,
             expected_edge_cents=int(round(ev.net_ev)),
+            action=extra.get("action", "skip"),
+            quantity=extra.get("quantity", 0),
+            reward_cents=extra.get("reward_cents"),
+            cost_cents=extra.get("cost_cents"),
+            lagrangian_score=extra.get("lagrangian_score"),
+            fee_cents=extra.get("fee_cents"),
+            resulting_capital_usd=extra.get("resulting_capital_usd"),
+            realized_round_trip_pnl_usd=extra.get("realized_round_trip_pnl_usd"),
+            unrealized_pnl_usd=extra.get("unrealized_pnl_usd"),
+            inventory_state_after=extra.get("inventory_state_after"),
+            state_context=extra,
         )
+
+    def apply_execution_to_risk(self, decision: CandidateDecision, risk: RiskState, fill_count: int = 1) -> RiskState:
+        now = datetime.now(timezone.utc).isoformat()
+        next_state = RiskState(**asdict(risk))
+        next_state.updated_at = now
+        next_state.last_ticker = decision.ticker
+        qty = max(1, fill_count or decision.quantity or 1)
+        next_state.unrealized_pnl_usd = decision.unrealized_pnl_usd or 0.0
+
+        if decision.decision != "TRADE" and decision.action not in {"sell_yes", "sell_no"}:
+            return next_state
+
+        action = decision.action
+        cost_usd = (decision.cost_cents or 0.0) / 100.0
+        reward_usd = (decision.reward_cents or 0.0) / 100.0
+        fee_usd = (decision.fee_cents or 0.0) / 100.0
+
+        if action.startswith("buy_yes") or action == "enter_long_yes":
+            next_state.inventory_state = "LONG_YES"
+            next_state.inventory_qty = qty
+            next_state.entry_price_cents = float(decision.planned_entry_cents or 0)
+            next_state.entry_notional_usd = max(0.0, cost_usd)
+            next_state.reserved_capital_usd += max(0.0, cost_usd)
+            next_state.current_capital_usd -= max(0.0, cost_usd)
+            next_state.open_positions = 1
+        elif action.startswith("buy_no") or action == "enter_long_no":
+            next_state.inventory_state = "LONG_NO"
+            next_state.inventory_qty = qty
+            next_state.entry_price_cents = float(decision.planned_entry_cents or 0)
+            next_state.entry_notional_usd = max(0.0, cost_usd)
+            next_state.reserved_capital_usd += max(0.0, cost_usd)
+            next_state.current_capital_usd -= max(0.0, cost_usd)
+            next_state.open_positions = 1
+        elif action in {"sell_yes", "sell_no"}:
+            released = max(0.0, -cost_usd)
+            next_state.current_capital_usd += released
+            if self.cfg.recycle_released_capital:
+                next_state.recycled_capital_usd += released
+            realized = reward_usd
+            next_state.daily_realized_pnl_usd += realized
+            next_state.realized_round_trip_pnl_usd += realized
+            next_state.consecutive_losses = next_state.consecutive_losses + 1 if realized < 0 else 0
+            next_state.inventory_state = "FLAT"
+            next_state.inventory_qty = 0
+            next_state.entry_price_cents = None
+            next_state.entry_notional_usd = 0.0
+            next_state.reserved_capital_usd = 0.0
+            next_state.unrealized_pnl_usd = 0.0
+            next_state.open_positions = 0
+
+        next_state.trades_last_hour += 1
+        if fee_usd > 0 and abs(cost_usd) > 0 and abs(fee_usd) / max(abs(cost_usd), 1e-9) > self.cfg.max_bad_slippage_cents / 100.0:
+            next_state.two_consecutive_bad_slippage = True
+        return next_state
 
     def execute_candidate(
         self,
@@ -358,28 +597,72 @@ class BTC15mExecutionAgent:
         client: KalshiClientInterface,
         log_dir: str | Path,
         live_enabled: bool,
+        risk: RiskState | None = None,
+        persist_state_path: str | Path | None = None,
     ) -> dict[str, Any] | None:
+        if self.cfg.vol_bwk_enabled and self.cfg.paper_only_vol_bwk and live_enabled:
+            raise RuntimeError("vol/BwK path is paper-only; refusing live execution.")
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
+        state = risk or RiskState(current_capital_usd=self.cfg.initial_capital_usd)
         _append_jsonl(log_path / self.cfg.candidate_log_jsonl, {
             "logged_at": datetime.now(timezone.utc).isoformat(),
             **asdict(decision),
         })
-        if decision.decision != "TRADE":
+        _append_jsonl(log_path / self.cfg.state_log_jsonl, {
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+            "ticker": decision.ticker,
+            "decision": decision.decision,
+            "action": decision.action,
+            "state_before": asdict(state),
+            "decision_metrics": {
+                "reward_cents": decision.reward_cents,
+                "cost_cents": decision.cost_cents,
+                "lagrangian_score": decision.lagrangian_score,
+                "fee_cents": decision.fee_cents,
+                "resulting_capital_usd": decision.resulting_capital_usd,
+                "realized_round_trip_pnl_usd": decision.realized_round_trip_pnl_usd,
+                "unrealized_pnl_usd": decision.unrealized_pnl_usd,
+            },
+        })
+        should_execute = decision.decision == "TRADE" or decision.action in {"sell_yes", "sell_no"}
+        if not should_execute:
+            if persist_state_path is not None:
+                save_risk_state(persist_state_path, state)
             return None
+        order_side = decision.side
+        limit_cents = decision.planned_entry_cents
+        if decision.action == "sell_yes":
+            order_side = "YES"
+            limit_cents = decision.orderbook_summary.get("yes_bid")
+        elif decision.action == "sell_no":
+            order_side = "NO"
+            limit_cents = decision.orderbook_summary.get("no_bid")
         order = KalshiOrder(
             event_ticker=decision.ticker,
-            side=decision.side,
+            side=order_side,
             stake_usd=float(self.cfg.max_dollars_per_trade),
-            limit_price=float(decision.planned_entry_cents) / 100.0,
+            limit_price=float(limit_cents) / 100.0,
         )
         response = client.place_order(order)
+        next_state = self.apply_execution_to_risk(decision, state, fill_count=int(response.get("count", decision.quantity or 1)))
+        if persist_state_path is not None:
+            save_risk_state(persist_state_path, next_state)
         trade_log = {
             "entry_time": datetime.now(timezone.utc).isoformat(),
             "ticker": decision.ticker,
             "side": decision.side,
+            "action": decision.action,
             "limit_price": decision.planned_entry_cents,
             "filled_size": response.get("count", 1),
+            "reward_cents": decision.reward_cents,
+            "cost_cents": decision.cost_cents,
+            "lagrangian_score": decision.lagrangian_score,
+            "fees_cents": decision.fee_cents,
+            "resulting_capital_usd": next_state.current_capital_usd,
+            "realized_round_trip_pnl_usd": next_state.realized_round_trip_pnl_usd,
+            "unrealized_pnl_usd": next_state.unrealized_pnl_usd,
+            "inventory_state_after": next_state.inventory_state,
             "fill_quality": response.get("status", "PAPER_PLACED" if not live_enabled else "LIVE_SENT"),
             "exit_price": None,
             "pnl": None,
@@ -399,13 +682,35 @@ def load_snapshot(path: str | Path) -> BTC15mMarketSnapshot:
     return BTC15mMarketSnapshot.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def load_snapshot_sequence(path: str | Path) -> list[BTC15mMarketSnapshot]:
+    p = Path(path)
+    raw_text = p.read_text(encoding="utf-8").strip()
+    if not raw_text:
+        return []
+    if p.suffix.lower() == ".jsonl":
+        items = [json.loads(line) for line in raw_text.splitlines() if line.strip()]
+    else:
+        payload = json.loads(raw_text)
+        items = payload if isinstance(payload, list) else payload.get("snapshots", [])
+    return [BTC15mMarketSnapshot.from_dict(item) for item in items]
+
+
 def load_risk_state(path: str | Path | None) -> RiskState:
     if path is None:
         return RiskState()
     p = Path(path)
     if not p.exists():
         return RiskState()
-    return RiskState(**json.loads(p.read_text(encoding="utf-8")))
+    payload = json.loads(p.read_text(encoding="utf-8"))
+    if "current_capital_usd" not in payload:
+        payload["current_capital_usd"] = 100.0
+    return RiskState(**payload)
+
+
+def save_risk_state(path: str | Path, risk: RiskState) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(asdict(risk), indent=2, default=str), encoding="utf-8")
 
 
 def _to_cents(value: Any) -> int:
