@@ -1,5 +1,12 @@
+const REFRESH_INTERVAL_MS = 60_000;
+
+let latestDataSignature = null;
+let refreshTimer = null;
+let refreshInFlight = false;
+
 async function loadData() {
-  const res = await fetch('./data/dashboard-data.json', { cache: 'no-store' });
+  const url = `./data/dashboard-data.json?ts=${Date.now()}`;
+  const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to load dashboard data: ${res.status}`);
   return res.json();
 }
@@ -32,6 +39,23 @@ function formatDate(value) {
 
 function badge(label, tone) {
   return `<span class="badge ${tone}">${label}</span>`;
+}
+
+function dataSignature(data) {
+  return JSON.stringify({
+    generatedAt: data?.meta?.generatedAt || null,
+    summary: data?.summary || null,
+    tradeCount: Array.isArray(data?.trades) ? data.trades.length : 0,
+    decisionCount: Array.isArray(data?.decisions) ? data.decisions.length : 0,
+    pnlPoints: Array.isArray(data?.pnlSeries) ? data.pnlSeries.length : 0,
+  });
+}
+
+function setRefreshStatus(message, tone = 'muted') {
+  const el = document.getElementById('refresh-status');
+  if (!el) return;
+  el.textContent = message;
+  el.className = `refresh-status ${tone}`;
 }
 
 function renderKpis(summary) {
@@ -162,15 +186,46 @@ function renderMeta(meta) {
   document.getElementById('generated-at').textContent = formatDate(meta.generatedAt);
 }
 
-loadData()
-  .then((data) => {
-    renderMeta(data.meta || {});
-    renderKpis(data.summary || {});
-    renderAssumptions(data.assumptions || []);
-    renderTrades(data.trades || []);
-    renderDecisions(data.decisions || []);
-    renderChart(data.pnlSeries || []);
-  })
-  .catch((error) => {
-    document.body.innerHTML = `<main class="page"><div class="panel"><h1>Dashboard load failed</h1><p class="subtext">${error.message}</p></div></main>`;
-  });
+function renderDashboard(data) {
+  renderMeta(data.meta || {});
+  renderKpis(data.summary || {});
+  renderAssumptions(data.assumptions || []);
+  renderTrades(data.trades || []);
+  renderDecisions(data.decisions || []);
+  renderChart(data.pnlSeries || []);
+}
+
+async function refreshDashboard({ initial = false } = {}) {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  if (initial) setRefreshStatus('Loading dashboard…');
+  try {
+    const data = await loadData();
+    const signature = dataSignature(data);
+    const changed = signature !== latestDataSignature;
+    if (changed) {
+      renderDashboard(data);
+      latestDataSignature = signature;
+    }
+    const generatedAt = data?.meta?.generatedAt ? formatDate(data.meta.generatedAt) : 'unknown time';
+    setRefreshStatus(changed ? `Auto-refresh on • updated from snapshot generated ${generatedAt}` : `Auto-refresh on • checked ${formatDate(new Date().toISOString())}`);
+  } catch (error) {
+    if (initial) {
+      document.body.innerHTML = `<main class="page"><div class="panel"><h1>Dashboard load failed</h1><p class="subtext">${error.message}</p></div></main>`;
+    } else {
+      setRefreshStatus(`Auto-refresh error • ${error.message}`, 'error');
+    }
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
+function startAutoRefresh() {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  refreshTimer = window.setInterval(() => {
+    refreshDashboard();
+  }, REFRESH_INTERVAL_MS);
+}
+
+refreshDashboard({ initial: true });
+startAutoRefresh();

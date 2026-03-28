@@ -61,6 +61,12 @@ h1 { font-size: 36px; margin-bottom: 8px; }
   font-size: 12px;
   margin-bottom: 6px;
 }
+.refresh-status {
+  display: block;
+  line-height: 1.35;
+}
+.refresh-status.muted { color: var(--text); }
+.refresh-status.error { color: var(--amber); }
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

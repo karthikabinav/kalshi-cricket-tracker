@@ -41,5 +41,15 @@ and writes:
 - **Decision log** is derived from `btc15m_candidate_decisions.jsonl` and shown as context for recent non-trade / trade decisions.
 - If no live artifact rows exist, the dashboard still renders an empty-safe state using the bundled JSON payload.
 
+## Auto-refresh behavior
+- The browser polls `data/dashboard-data.json` every 60 seconds with `cache: 'no-store'` plus a timestamp query param, so an already-open dashboard tab picks up newly deployed static snapshots without a manual reload.
+- The page only re-renders when the fetched payload signature changes, which avoids unnecessary churn.
+- This does **not** generate new data on Vercel. Fresh dashboard content still requires regenerating `dashboard/data/dashboard-data.json` from repo artifacts and then redeploying the static site.
+
 ## Vercel
 Deploy this `dashboard/` directory as the Vercel project root. No build command is required.
+
+Redeploy implications:
+1. Run `.venv/bin/python scripts/build_dashboard_data.py` after artifact changes.
+2. Commit/push the updated `dashboard/data/dashboard-data.json` (or otherwise trigger a deployment containing it).
+3. Vercel serves the new static snapshot, and open tabs pick it up on the next 60-second refresh cycle.

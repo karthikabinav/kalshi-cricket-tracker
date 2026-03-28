@@ -12,7 +12,7 @@ MVP research assistant for cricket-driven Kalshi market exploration (**paper mod
 - Mock Kalshi integration (paper fills)
 - Optional Kalshi REST scaffold (disabled unless explicitly enabled)
 - CLI + minimal Streamlit dashboard
-- Static BTC15 dashboard for Vercel deployment (`dashboard/`)
+- Static BTC15 dashboard for Vercel deployment (`dashboard/`), with client-side polling to pick up newly deployed snapshots
 - Tests + reproducible scripts
 
 ## Install
