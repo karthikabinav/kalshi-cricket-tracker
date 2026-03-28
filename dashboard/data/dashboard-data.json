@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "generatedAt": "2026-03-28T01:02:16.698945+00:00",
+    "dataSource": "repo artifacts",
+    "artifactFiles": [
+      "artifacts/btc15m_executed_trades.jsonl",
+      "artifacts/btc15m_candidate_decisions.jsonl",
+      "artifacts/paper_fills.csv"
+    ]
+  },
+  "summary": {
+    "realizedPnlUsd": 0,
+    "totalTransactionVolumeUsd": 100.0,
+    "executedTradeCount": 1,
+    "openTradeCount": 1,
+    "closedTradeCount": 0,
+    "tradesWithRealizedPnl": 0,
+    "lastDecision": {
+      "loggedAt": "2026-03-25T00:31:43.450764+00:00",
+      "decision": "NO TRADE",
+      "ticker": "KXBTC15M-26MAR242045-45",
+      "side": "NONE",
+      "confidence": 0,
+      "reason": "Too early for the intended BTC 15m entry window.",
+      "timeRemainingMin": 13.28,
+      "expectedEdgeCents": null
+    }
+  },
+  "assumptions": [
+    "PnL is realized-only: the dashboard sums numeric `pnl` values from `btc15m_executed_trades.jsonl` and excludes null/unknown values.",
+    "Transaction volume uses `raw_response.stake_usd` when present; otherwise it falls back to `filled_size * limit_price / 100`.",
+    "Trades with null `pnl` and null `exit_price` are labeled OPEN; everything else is treated as CLOSED for UI purposes.",
+    "Decision context is sourced from `btc15m_candidate_decisions.jsonl`; it is informational and separate from executed trade accounting.",
+    "The payload is a static snapshot generated at build time, so Vercel serves the last exported artifact state rather than reading live logs at runtime."
+  ],
+  "trades": [
+    {
+      "entryTime": "2026-03-24T23:59:15.516003+00:00",
+      "ticker": "KXBTCD-15M-TEST",
+      "side": "YES",
+      "limitPriceCents": 58.0,
+      "filledSize": 1.0,
+      "fillQuality": "PAPER_FILLED",
+      "exitPriceCents": null,
+      "pnlUsd": null,
+      "status": "OPEN",
+      "classification": "paper_trade",
+      "volumeUsd": 100.0
+    }
+  ],
+  "decisions": [
+    {
+      "loggedAt": "2026-03-25T00:31:43.450764+00:00",
+      "decision": "NO TRADE",
+      "ticker": "KXBTC15M-26MAR242045-45",
+      "side": "NONE",
+      "confidence": 0,
+      "reason": "Too early for the intended BTC 15m entry window.",
+      "timeRemainingMin": 13.28,
+      "expectedEdgeCents": null
+    },
+    {
+      "loggedAt": "2026-03-25T00:19:27.308775+00:00",
+      "decision": "NO TRADE",
+      "ticker": "KXBTC15M-26MAR242030-30",
+      "side": "NONE",
+      "confidence": 0,
+      "reason": "Order book is unstable / repricing too fast.",
+      "timeRemainingMin": 10.54,
+      "expectedEdgeCents": null
+    },
+    {
+      "loggedAt": "2026-03-24T23:59:15.515836+00:00",
+      "decision": "TRADE",
+      "ticker": "KXBTCD-15M-TEST",
+      "side": "YES",
+      "confidence": 32,
+      "reason": "YES leg has 5c estimated edge with 8.0 minutes left, 1c spread, depth 50, and stable book.",
+      "timeRemainingMin": 7.99,
+      "expectedEdgeCents": 5
+    },
+    {
+      "loggedAt": "2026-03-24T23:59:00.621184+00:00",
+      "decision": "NO TRADE",
+      "ticker": "KXBTCD-15M-TEST",
+      "side": "NONE",
+      "confidence": 0,
+      "reason": "Too close to resolution; late-entry chaos filter triggered.",
+      "timeRemainingMin": -34551.01,
+      "expectedEdgeCents": null
+    },
+    {
+      "loggedAt": "2026-03-24T23:50:28.732035+00:00",
+      "decision": "NO TRADE",
+      "ticker": "KXBTCD-15M-TEST",
+      "side": "NONE",
+      "confidence": 0,
+      "reason": "BTC 15m execution agent disabled in config; safe default is abstain.",
+      "timeRemainingMin": -34542.48,
+      "expectedEdgeCents": null
+    }
+  ],
+  "pnlSeries": []
+}

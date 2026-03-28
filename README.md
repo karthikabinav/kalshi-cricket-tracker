@@ -12,6 +12,7 @@ MVP research assistant for cricket-driven Kalshi market exploration (**paper mod
 - Mock Kalshi integration (paper fills)
 - Optional Kalshi REST scaffold (disabled unless explicitly enabled)
 - CLI + minimal Streamlit dashboard
+- Static BTC15 dashboard for Vercel deployment (`dashboard/`)
 - Tests + reproducible scripts
 
 ## Install
@@ -34,6 +35,8 @@ kct bandit-backtest --config configs/default.yaml
 kct arb-backtest --snapshots-csv docs/sample_arb_snapshots.csv --config configs/default.yaml
 kct btc15m-exec --snapshot-json docs/btc15m_snapshot.example.json --config configs/default.yaml
 streamlit run scripts/dashboard.py -- --config configs/default.yaml
+.venv/bin/python scripts/build_dashboard_data.py
+cd dashboard && python3 -m http.server 4173
 ```
 
 Preflight checks:
@@ -159,6 +162,8 @@ set -a && source .env.kalshi && set +a
 - `src/kalshi_cricket_tracker/execution/guards.py` live-trading safety checks
 - `docs/BANDIT.md` equations and assumptions
 - `artifacts/` outputs (`daily_signals.csv`, `backtest_metrics.json`, `bandit_metrics.json`, ...)
+- `dashboard/` static BTC15 UI for Vercel
+- `scripts/build_dashboard_data.py` artifact-to-dashboard JSON exporter
 
 ## Notes
 - Live trading is disabled by default.

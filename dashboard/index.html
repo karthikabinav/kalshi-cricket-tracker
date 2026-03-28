@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kalshi BTC15 Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Kalshi BTC15</p>
+          <h1>Trading dashboard</h1>
+          <p class="subtext">Static dashboard generated from repo artifacts for Vercel-safe monitoring.</p>
+        </div>
+        <div class="hero-meta">
+          <div class="hero-pill">
+            <span>Data source</span>
+            <strong id="data-source">artifacts snapshot</strong>
+          </div>
+          <div class="hero-pill">
+            <span>Generated</span>
+            <strong id="generated-at">—</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="kpi-grid" id="kpi-grid"></section>
+
+      <section class="panel-grid">
+        <article class="panel wide">
+          <div class="panel-header">
+            <div>
+              <h2>PnL trajectory</h2>
+              <p>Realized PnL from executed trades with numeric `pnl` values.</p>
+            </div>
+          </div>
+          <div id="pnl-chart" class="chart"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Data assumptions</h2>
+              <p>Explicit modeling choices used by the exporter.</p>
+            </div>
+          </div>
+          <ul id="assumptions" class="assumption-list"></ul>
+        </article>
+      </section>
+
+      <section class="panel-grid">
+        <article class="panel wide">
+          <div class="panel-header">
+            <div>
+              <h2>Recent trades</h2>
+              <p>Easy-read BTC15 trade log with status, side, price, size, and PnL.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Ticker</th>
+                  <th>Side</th>
+                  <th>Status</th>
+                  <th>Limit</th>
+                  <th>Size</th>
+                  <th>Volume</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="trades-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Recent decisions</h2>
+              <p>Last BTC15 agent evaluations for context.</p>
+            </div>
+          </div>
+          <div id="decision-list" class="decision-list"></div>
+        </article>
+      </section>
+    </main>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
