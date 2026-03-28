@@ -346,10 +346,20 @@ class BTC15mExecutionAgent:
             expected_recovery_cents=self.cfg.bwk_expected_recovery_cents,
         )
 
-        if evaluation.action.startswith("buy_yes") and snapshot.yes_ask_cents > self.cfg.band_entry_cents:
-            evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: ask {snapshot.yes_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
-        elif evaluation.action.startswith("buy_no") and snapshot.no_ask_cents > self.cfg.band_entry_cents:
-            evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: ask {snapshot.no_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
+        if evaluation.action.startswith("buy_yes"):
+            projected_exit = max(snapshot.yes_bid_cents, self.cfg.band_exit_cents)
+            projected_round_trip = projected_exit - snapshot.yes_ask_cents - (2.0 * self.cfg.fee_bps_per_side * snapshot.yes_ask_cents / 10000.0)
+            if snapshot.yes_ask_cents > self.cfg.band_entry_cents:
+                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: ask {snapshot.yes_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
+            elif projected_round_trip <= 0 or evaluation.lagrangian_score <= 0:
+                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_yes blocked: projected round-trip {projected_round_trip:.2f}c not positive")
+        elif evaluation.action.startswith("buy_no"):
+            projected_exit = max(snapshot.no_bid_cents, self.cfg.band_exit_cents)
+            projected_round_trip = projected_exit - snapshot.no_ask_cents - (2.0 * self.cfg.fee_bps_per_side * snapshot.no_ask_cents / 10000.0)
+            if snapshot.no_ask_cents > self.cfg.band_entry_cents:
+                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: ask {snapshot.no_ask_cents}c above entry band {self.cfg.band_entry_cents}c")
+            elif projected_round_trip <= 0 or evaluation.lagrangian_score <= 0:
+                evaluation = BwKActionEvaluation(action="skip", reward=0.0, cost=0.0, lagrangian_score=0.0, next_state=position.state, fee_load=0.0, rationale=f"buy_no blocked: projected round-trip {projected_round_trip:.2f}c not positive")
         elif evaluation.action == "hold_position" and position.state == "LONG_YES" and snapshot.yes_bid_cents >= self.cfg.band_exit_cents:
             evaluation = self.bwk_policy.evaluate_action(position=position, snapshot=vol_snapshot, action="sell_yes", lambda_cost=self.cfg.bwk_lambda_cost, expected_recovery_cents=self.cfg.bwk_expected_recovery_cents)
         elif evaluation.action == "hold_position" and position.state == "LONG_NO" and snapshot.no_bid_cents >= self.cfg.band_exit_cents:

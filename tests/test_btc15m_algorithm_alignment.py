@@ -130,6 +130,14 @@ def test_band_logic_blocks_buy_above_entry_band():
     assert decision.action == "skip"
 
 
+def test_band_logic_blocks_non_positive_round_trip():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": True, "band_entry_cents": 60, "band_exit_cents": 20})
+    agent = BTC15mExecutionAgent(cfg)
+    decision = agent.evaluate(make_snapshot(yes_bid_cents=82, yes_ask_cents=83, no_bid_cents=17, no_ask_cents=18), RiskState())
+    assert decision.decision == "NO TRADE"
+    assert decision.action == "skip"
+
+
 def test_algorithm_paper_execution_persists_logs_and_state(tmp_path):
     cfg = MID_CFG.model_copy(update={"candidate_log_jsonl": "cand.jsonl", "executed_log_jsonl": "trades.jsonl", "state_log_jsonl": "state.jsonl", "risk_state_json": "risk.json"})
     agent = BTC15mExecutionAgent(cfg)
