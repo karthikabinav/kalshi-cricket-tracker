@@ -11,9 +11,9 @@ btc15m:
   recycle_released_capital: true
   min_time_to_close_min: 3.0
   max_time_to_close_min: 12.0
-  min_depth_contracts: 25
-  max_spread_cents: 2
-  max_orderbook_instability_bps: 60.0
+  min_depth_contracts: 1
+  max_spread_cents: 4
+  max_orderbook_instability_bps: 9000.0
   dominant_side_min_cents: 80
   exit_edge_cents: 1
   min_reward_cents: 1

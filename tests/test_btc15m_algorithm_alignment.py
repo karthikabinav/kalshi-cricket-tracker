@@ -13,6 +13,9 @@ MID_CFG = BTC15mExecConfig(
     vol_bwk_enabled=False,
     min_time_to_close_min=3.0,
     max_time_to_close_min=12.0,
+    min_depth_contracts=25,
+    max_spread_cents=2,
+    max_orderbook_instability_bps=60.0,
     min_confidence=20,
     min_ev_to_trade_cents=0.2,
 )
