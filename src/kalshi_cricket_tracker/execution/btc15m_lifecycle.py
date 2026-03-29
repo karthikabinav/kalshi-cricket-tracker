@@ -133,7 +133,16 @@ def run_market_worker(
     summary_path, learning_path = finalize_market_run(cfg, market_ticker, artifact_root)
     try:
         import subprocess
-        subprocess.run(["python3", "scripts/build_dashboard_data.py"], cwd=Path(__file__).resolve().parents[3], check=False)
+        subprocess.run(
+            [
+                "python3",
+                "scripts/build_dashboard_data.py",
+                "--artifact-dir",
+                str(artifact_root),
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            check=False,
+        )
     except Exception:
         pass
 

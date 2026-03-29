@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from datetime import datetime, timezone
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "artifacts"
+DEFAULT_ARTIFACTS = ROOT / "artifacts"
 OUT = ROOT / "dashboard" / "data" / "dashboard-data.json"
 INITIAL_CAPITAL_USD = 100.0
 
@@ -123,12 +124,12 @@ def current_capital_usd(realized_total: float, risk_state: dict[str, Any] | None
     return round(INITIAL_CAPITAL_USD + realized_total, 4)
 
 
-def build_payload() -> dict[str, Any]:
-    executed_trades = [normalize_trade(r) for r in read_jsonl(ARTIFACTS / "btc15m_executed_trades.jsonl")]
-    decisions = [normalize_decision(r) for r in read_jsonl(ARTIFACTS / "btc15m_candidate_decisions.jsonl")]
-    state_trace = read_jsonl(ARTIFACTS / "btc15m_state_trace.jsonl")
-    risk_state = read_json(ARTIFACTS / "btc15m_risk_state.json")
-    _paper_fills = read_csv_rows(ARTIFACTS / "paper_fills.csv")
+def build_payload(artifact_dir: Path = DEFAULT_ARTIFACTS) -> dict[str, Any]:
+    executed_trades = [normalize_trade(r) for r in read_jsonl(artifact_dir / "btc15m_executed_trades.jsonl")]
+    decisions = [normalize_decision(r) for r in read_jsonl(artifact_dir / "btc15m_candidate_decisions.jsonl")]
+    state_trace = read_jsonl(artifact_dir / "btc15m_state_trace.jsonl")
+    risk_state = read_json(artifact_dir / "btc15m_risk_state.json")
+    _paper_fills = read_csv_rows(artifact_dir / "paper_fills.csv")
 
     executed_trades.sort(key=lambda row: sort_key(row.get("entryTime")), reverse=True)
     decisions.sort(key=lambda row: sort_key(row.get("loggedAt")), reverse=True)
@@ -149,7 +150,7 @@ def build_payload() -> dict[str, Any]:
         pnl_series.append({"at": trade.get("entryTime"), "cumulativePnlUsd": round(cumulative, 4), "ticker": trade.get("ticker")})
 
     assumptions = [
-        "Current capital uses `artifacts/btc15m_risk_state.json` when present; otherwise it falls back to initial capital plus realized PnL.",
+        f"Current capital uses `{artifact_dir / 'btc15m_risk_state.json'}` when present; otherwise it falls back to initial capital plus realized PnL.",
         "Overall PnL is realized-only: numeric `pnl` values from `btc15m_executed_trades.jsonl` are summed, while null/unknown values remain open/unrealized.",
         "Hourly average PnL is realized PnL divided by observed realized-trade time span in hours, floored at 1 hour to avoid noisy division.",
         "Transaction volume uses `raw_response.stake_usd` when present; otherwise it falls back to `filled_size * limit_price / 100`.",
@@ -161,13 +162,13 @@ def build_payload() -> dict[str, Any]:
     return {
         "meta": {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "dataSource": "repo artifacts",
+            "dataSource": str(artifact_dir),
             "artifactFiles": [
-                "artifacts/btc15m_executed_trades.jsonl",
-                "artifacts/btc15m_candidate_decisions.jsonl",
-                "artifacts/btc15m_risk_state.json",
-                "artifacts/btc15m_state_trace.jsonl",
-                "artifacts/paper_fills.csv",
+                str(artifact_dir / "btc15m_executed_trades.jsonl"),
+                str(artifact_dir / "btc15m_candidate_decisions.jsonl"),
+                str(artifact_dir / "btc15m_risk_state.json"),
+                str(artifact_dir / "btc15m_state_trace.jsonl"),
+                str(artifact_dir / "paper_fills.csv"),
             ],
         },
         "summary": {
@@ -191,11 +192,21 @@ def build_payload() -> dict[str, Any]:
     }
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build dashboard payload from BTC15 paper artifacts.")
+    parser.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACTS), help="Artifact directory to read from.")
+    parser.add_argument("--out", default=str(OUT), help="Output JSON path.")
+    return parser.parse_args()
+
+
 def main() -> None:
-    payload = build_payload()
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(f"wrote {OUT}")
+    args = parse_args()
+    artifact_dir = Path(args.artifact_dir)
+    out = Path(args.out)
+    payload = build_payload(artifact_dir=artifact_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
