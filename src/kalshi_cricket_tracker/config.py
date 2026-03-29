@@ -115,6 +115,11 @@ class BTC15mExecConfig(BaseModel):
     bwk_expected_recovery_cents: float = 1.5
     manual_entry_cents: int = 60
     manual_profit_target_usd: float = 10.0
+    btc_trend_filter_enabled: bool = True
+    btc_spot_slope_threshold: float = 25.0
+    btc_spot_acceleration_threshold: float = 10.0
+    contract_slope_threshold_cents: float = 2.0
+    contract_acceleration_threshold_cents: float = 1.0
     band_entry_cents: int = 60
     band_exit_cents: int = 80
     risk_state_json: str = "btc15m_risk_state.json"

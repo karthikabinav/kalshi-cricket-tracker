@@ -162,6 +162,41 @@ def test_btc15m_manual_paper_state_machine_buy_then_sell_updates_inventory_and_c
     assert risk_after_sell.realized_round_trip_pnl_usd > 0
 
 
+def test_btc15m_manual_paper_entry_blocked_by_btc_trend_filter_against_yes():
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, prev_btc_basis=100000.0, last_btc_basis=100020.0, last_btc_slope=20.0)
+    snapshot = make_snapshot(
+        yes_bid_cents=58,
+        yes_ask_cents=59,
+        no_bid_cents=41,
+        no_ask_cents=42,
+        btc_spot=100060.0,
+    )
+    decision = agent.evaluate(snapshot, risk)
+    assert decision.decision == "NO TRADE"
+    assert decision.action == "skip"
+    assert "trend filter blocked yes" in decision.reason.lower()
+
+
+
+def test_btc15m_manual_paper_entry_allowed_when_btc_trend_reverses_for_yes():
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, prev_btc_basis=100000.0, last_btc_basis=100030.0, last_btc_slope=30.0)
+    snapshot = make_snapshot(
+        yes_bid_cents=58,
+        yes_ask_cents=59,
+        no_bid_cents=41,
+        no_ask_cents=42,
+        btc_spot=100040.0,
+    )
+    decision = agent.evaluate(snapshot, risk)
+    assert decision.decision == "TRADE"
+    assert decision.action == "buy_yes"
+
+
+
 def test_load_snapshot_sequence_supports_jsonl(tmp_path):
     payload = [
         {**make_snapshot(snapshot_index=0, snapshot_sequence_id="seq-1").__dict__, "close_time": make_snapshot().close_time.isoformat()},

@@ -131,6 +131,9 @@ class RiskState:
     unrealized_pnl_usd: float = 0.0
     last_ticker: str | None = None
     updated_at: str | None = None
+    last_btc_basis: float | None = None
+    prev_btc_basis: float | None = None
+    last_btc_slope: float | None = None
 
 
 
@@ -308,6 +311,42 @@ class BTC15mExecutionAgent:
     def _manual_paper_enabled(self) -> bool:
         return bool(self.cfg.manual_paper_enabled or self.cfg.vol_bwk_enabled)
 
+    def _current_btc_basis(self, snapshot: BTC15mMarketSnapshot) -> tuple[float, str]:
+        if snapshot.btc_spot is not None:
+            return float(snapshot.btc_spot), "btc_spot"
+        return float(snapshot.contract_price_cents), "contract_price"
+
+    def _btc_trend_metrics(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[float | None, float | None, str]:
+        current_basis, source = self._current_btc_basis(snapshot)
+        if risk.last_btc_basis is None:
+            return None, None, source
+        slope = current_basis - risk.last_btc_basis
+        acceleration = None if risk.last_btc_slope is None else slope - risk.last_btc_slope
+        return slope, acceleration, source
+
+    def _btc_trend_blocks_entry(self, side: Literal["YES", "NO"], snapshot: BTC15mMarketSnapshot, risk: RiskState) -> str | None:
+        if not self.cfg.btc_trend_filter_enabled:
+            return None
+        slope, acceleration, source = self._btc_trend_metrics(snapshot, risk)
+        if slope is None or acceleration is None:
+            return None
+        if source == "btc_spot":
+            slope_threshold = self.cfg.btc_spot_slope_threshold
+            acceleration_threshold = self.cfg.btc_spot_acceleration_threshold
+            units = "USD"
+        else:
+            slope_threshold = self.cfg.contract_slope_threshold_cents
+            acceleration_threshold = self.cfg.contract_acceleration_threshold_cents
+            units = "c"
+        against_yes = side == "YES" and slope >= slope_threshold and acceleration >= acceleration_threshold
+        against_no = side == "NO" and slope <= -slope_threshold and acceleration <= -acceleration_threshold
+        if against_yes or against_no:
+            return (
+                f"BTC trend filter blocked {side}: {source} slope {slope:.2f}{units} and "
+                f"acceleration {acceleration:.2f}{units} still move against the mean-reversion entry."
+            )
+        return None
+
     def _evaluate_manual_paper_state_machine(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
         mins_left = max(0.0, snapshot.time_remaining.total_seconds() / 60.0)
         entry_fee_rate = 2.0 * self.cfg.fee_bps_per_side / 10000.0
@@ -332,13 +371,17 @@ class BTC15mExecutionAgent:
                 candidates.append((abs(self.cfg.manual_entry_cents - snapshot.no_ask_cents), "NO", snapshot.no_ask_cents))
             if candidates:
                 _, chosen_side, ask_cents = min(candidates, key=lambda item: item[0])
-                fee_cents = ask_cents * entry_fee_rate
-                cost_cents = ask_cents
-                reward_cents = max(0.0, target_exit_cents - ask_cents)
-                score_cents = reward_cents - fee_cents
-                rationale = f"manual entry: buy {chosen_side} at {ask_cents}c near {self.cfg.manual_entry_cents}c with ${qty * ask_cents / 100.0:.2f} paper notional"
-                action = "buy_yes" if chosen_side == "YES" else "buy_no"
-                next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
+                trend_block = self._btc_trend_blocks_entry(chosen_side, snapshot, risk)
+                if trend_block is not None:
+                    rationale = trend_block
+                else:
+                    fee_cents = ask_cents * entry_fee_rate
+                    cost_cents = ask_cents
+                    reward_cents = max(0.0, target_exit_cents - ask_cents)
+                    score_cents = reward_cents - fee_cents
+                    rationale = f"manual entry: buy {chosen_side} at {ask_cents}c near {self.cfg.manual_entry_cents}c with ${qty * ask_cents / 100.0:.2f} paper notional"
+                    action = "buy_yes" if chosen_side == "YES" else "buy_no"
+                    next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
         else:
             is_yes = inventory_state == "LONG_YES"
             mark_bid = snapshot.yes_bid_cents if is_yes else snapshot.no_bid_cents
@@ -389,6 +432,8 @@ class BTC15mExecutionAgent:
             recommended_size=qty,
             recommended_action=rec_action,
         )
+        slope, acceleration, basis_source = self._btc_trend_metrics(snapshot, risk)
+        current_basis, _ = self._current_btc_basis(snapshot)
         return est, {
             "manual_action": action,
             "manual_reward_cents": reward_cents,
@@ -399,6 +444,10 @@ class BTC15mExecutionAgent:
             "manual_rationale": rationale,
             "manual_target_exit_cents": target_exit_cents,
             "unrealized_cents": unrealized_cents,
+            "btc_basis_source": basis_source,
+            "btc_basis_value": current_basis,
+            "btc_basis_slope": slope,
+            "btc_basis_acceleration": acceleration,
         }
 
     def estimate_trade_ev(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> EVEstimate:
@@ -526,6 +575,8 @@ class BTC15mExecutionAgent:
         if action not in {"ENTER_LONG_YES", "ENTER_LONG_NO"}:
             if action == "EXIT":
                 return abstain("Open-position EV turned negative or timing/rule checks deteriorated; exit is preferred.", confidence=confidence, extra=extra)
+            if self._manual_paper_enabled() and manual_info.get("manual_rationale"):
+                return abstain(str(manual_info["manual_rationale"]), confidence=confidence, extra=extra)
             return abstain("Net EV after fees, slippage, and safety buffer is not strong enough to trade.", confidence=confidence, extra=extra)
 
         planned_profit = min(99, int(entry or 0) + self.cfg.target_take_profit_cents)
@@ -571,6 +622,12 @@ class BTC15mExecutionAgent:
         next_state.last_ticker = decision.ticker
         qty = max(1, fill_count or decision.quantity or 1)
         next_state.unrealized_pnl_usd = decision.unrealized_pnl_usd or 0.0
+        basis_value = decision.state_context.get("btc_basis_value") if decision.state_context else None
+        if basis_value is not None:
+            previous_basis = next_state.last_btc_basis
+            next_state.prev_btc_basis = previous_basis
+            next_state.last_btc_basis = float(basis_value)
+            next_state.last_btc_slope = None if previous_basis is None else float(basis_value) - float(previous_basis)
 
         if decision.decision != "TRADE" and decision.action not in {"sell_yes", "sell_no"}:
             return next_state
@@ -654,8 +711,9 @@ class BTC15mExecutionAgent:
         })
         should_execute = decision.decision == "TRADE" or decision.action in {"sell_yes", "sell_no"}
         if not should_execute:
+            next_state = self.apply_execution_to_risk(decision, state, fill_count=1)
             if persist_state_path is not None:
-                save_risk_state(persist_state_path, state)
+                save_risk_state(persist_state_path, next_state)
             return None
         order_side = decision.side
         limit_cents = decision.planned_entry_cents
