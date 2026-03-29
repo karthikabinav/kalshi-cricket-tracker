@@ -118,9 +118,27 @@ def test_algorithm_no_trade_does_not_log_executable_buy_action_when_blocked():
 def test_band_logic_blocks_buy_above_entry_band():
     cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "manual_entry_cents": 60})
     agent = BTC15mExecutionAgent(cfg)
-    decision = agent.evaluate(make_snapshot(yes_ask_cents=67, yes_bid_cents=64, no_ask_cents=36, no_bid_cents=33), RiskState())
+    decision = agent.evaluate(make_snapshot(yes_ask_cents=71, yes_bid_cents=68, no_ask_cents=29, no_bid_cents=27), RiskState())
     assert decision.decision == "NO TRADE"
     assert decision.action == "skip"
+
+
+def test_band_logic_blocks_buy_far_below_entry_band():
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "manual_entry_cents": 60})
+    agent = BTC15mExecutionAgent(cfg)
+    decision = agent.evaluate(make_snapshot(yes_ask_cents=1, yes_bid_cents=1, no_ask_cents=99, no_bid_cents=99), RiskState())
+    assert decision.decision == "NO TRADE"
+    assert decision.action == "skip"
+    assert "entry band" in decision.reason.lower()
+
+
+def test_band_logic_uses_yes_equivalent_price_for_no_entries():
+    cfg = MID_CFG.model_copy(update={"manual_paper_enabled": True, "manual_entry_cents": 60})
+    agent = BTC15mExecutionAgent(cfg)
+    decision = agent.evaluate(make_snapshot(yes_ask_cents=44, yes_bid_cents=43, no_ask_cents=44, no_bid_cents=43), RiskState())
+    assert decision.decision == "TRADE"
+    assert decision.action == "buy_no"
+    assert "intended yes price 56c" in decision.reason.lower()
 
 
 def test_band_logic_prefers_side_closest_to_entry_band():

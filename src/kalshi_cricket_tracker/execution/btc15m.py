@@ -347,12 +347,23 @@ class BTC15mExecutionAgent:
             )
         return None
 
+    def _manual_entry_yes_equivalent_band(self) -> tuple[int, int]:
+        target = int(self.cfg.manual_entry_cents)
+        configured_span = max(0, int(self.cfg.band_exit_cents) - target)
+        half_width = max(0, configured_span // 2)
+        return max(0, target - half_width), min(99, target + half_width)
+
+    @staticmethod
+    def _manual_entry_yes_equivalent_price(side: Literal["YES", "NO"], ask_cents: int) -> int:
+        return int(ask_cents) if side == "YES" else 100 - int(ask_cents)
+
     def _evaluate_manual_paper_state_machine(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> tuple[EVEstimate, dict[str, Any]]:
         mins_left = max(0.0, snapshot.time_remaining.total_seconds() / 60.0)
         entry_fee_rate = 2.0 * self.cfg.fee_bps_per_side / 10000.0
         inventory_state = risk.inventory_state
         qty = max(1, risk.inventory_qty) if inventory_state != "FLAT" else max(1, int(self.cfg.max_dollars_per_trade / max(0.01, self.cfg.manual_entry_cents / 100.0)))
         target_exit_cents = max(self.cfg.manual_entry_cents, int(round(self.cfg.manual_entry_cents + self.cfg.manual_profit_target_usd / max(qty, 1) * 100.0)))
+        entry_band_low_cents, entry_band_high_cents = self._manual_entry_yes_equivalent_band()
 
         action = "skip"
         next_state = inventory_state
@@ -360,19 +371,22 @@ class BTC15mExecutionAgent:
         cost_cents = 0.0
         fee_cents = 0.0
         score_cents = 0.0
-        rationale = f"manual state machine idle: no side offered at or below {self.cfg.manual_entry_cents}c"
+        rationale = (
+            "manual state machine idle: no side offered inside the "
+            f"{entry_band_low_cents}c-{entry_band_high_cents}c intended YES-price entry band"
+        )
         unrealized_cents = 0.0
         realizable_cents = 0.0
         stop_loss_usd = 0.0
 
         if inventory_state == "FLAT":
-            candidates: list[tuple[int, Literal["YES", "NO"], int]] = []
-            if snapshot.yes_ask_cents <= self.cfg.manual_entry_cents:
-                candidates.append((abs(self.cfg.manual_entry_cents - snapshot.yes_ask_cents), "YES", snapshot.yes_ask_cents))
-            if snapshot.no_ask_cents <= self.cfg.manual_entry_cents:
-                candidates.append((abs(self.cfg.manual_entry_cents - snapshot.no_ask_cents), "NO", snapshot.no_ask_cents))
+            candidates: list[tuple[int, Literal["YES", "NO"], int, int]] = []
+            for side, ask_cents in (("YES", snapshot.yes_ask_cents), ("NO", snapshot.no_ask_cents)):
+                intended_yes_price = self._manual_entry_yes_equivalent_price(side, ask_cents)
+                if entry_band_low_cents <= intended_yes_price <= entry_band_high_cents:
+                    candidates.append((abs(self.cfg.manual_entry_cents - intended_yes_price), side, ask_cents, intended_yes_price))
             if candidates:
-                _, chosen_side, ask_cents = min(candidates, key=lambda item: item[0])
+                _, chosen_side, ask_cents, intended_yes_price = min(candidates, key=lambda item: item[0])
                 trend_block = self._btc_trend_blocks_entry(chosen_side, snapshot, risk)
                 if trend_block is not None:
                     rationale = trend_block
@@ -381,7 +395,11 @@ class BTC15mExecutionAgent:
                     cost_cents = ask_cents
                     reward_cents = max(0.0, target_exit_cents - ask_cents)
                     score_cents = reward_cents - fee_cents
-                    rationale = f"manual entry: buy {chosen_side} at {ask_cents}c near {self.cfg.manual_entry_cents}c with ${qty * ask_cents / 100.0:.2f} paper notional"
+                    rationale = (
+                        f"manual entry: buy {chosen_side} at {ask_cents}c "
+                        f"(intended YES price {intended_yes_price}c) near {self.cfg.manual_entry_cents}c "
+                        f"with ${qty * ask_cents / 100.0:.2f} paper notional"
+                    )
                     action = "buy_yes" if chosen_side == "YES" else "buy_no"
                     next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
         else:
