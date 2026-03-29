@@ -130,6 +130,8 @@ class RiskState:
     realized_round_trip_pnl_usd: float = 0.0
     unrealized_pnl_usd: float = 0.0
     last_ticker: str | None = None
+    last_completed_ticker: str | None = None
+    market_round_trip_complete: bool = False
     updated_at: str | None = None
     last_btc_basis: float | None = None
     prev_btc_basis: float | None = None
@@ -221,6 +223,8 @@ class BTC15mExecutionAgent:
             return "Insufficient top-of-book depth."
         if snapshot.orderbook_stability_bps > self.cfg.max_orderbook_instability_bps:
             return "Order book is unstable / repricing too fast."
+        if risk.market_round_trip_complete and risk.last_completed_ticker == snapshot.ticker and snapshot.current_position_side is None and risk.inventory_state == "FLAT":
+            return "Round trip for this market already completed."
         if risk.open_positions >= self.cfg.max_simultaneous_positions and snapshot.current_position_side is None and risk.inventory_state == "FLAT":
             return "Max simultaneous position limit already reached."
         if risk.daily_realized_pnl_usd <= -abs(self.cfg.max_daily_loss_usd):
@@ -677,6 +681,8 @@ class BTC15mExecutionAgent:
         fee_usd = qty * (decision.fee_cents or 0.0) / 100.0
 
         if action.startswith("buy_yes") or action == "enter_long_yes":
+            if next_state.last_completed_ticker != decision.ticker:
+                next_state.market_round_trip_complete = False
             next_state.inventory_state = "LONG_YES"
             next_state.inventory_qty = qty
             next_state.entry_price_cents = float(decision.planned_entry_cents or 0)
@@ -685,6 +691,8 @@ class BTC15mExecutionAgent:
             next_state.current_capital_usd -= max(0.0, cost_usd)
             next_state.open_positions = 1
         elif action.startswith("buy_no") or action == "enter_long_no":
+            if next_state.last_completed_ticker != decision.ticker:
+                next_state.market_round_trip_complete = False
             next_state.inventory_state = "LONG_NO"
             next_state.inventory_qty = qty
             next_state.entry_price_cents = float(decision.planned_entry_cents or 0)
@@ -708,6 +716,8 @@ class BTC15mExecutionAgent:
             next_state.reserved_capital_usd = 0.0
             next_state.unrealized_pnl_usd = 0.0
             next_state.open_positions = 0
+            next_state.last_completed_ticker = decision.ticker
+            next_state.market_round_trip_complete = True
 
         next_state.trades_last_hour += 1
         if fee_usd > 0 and abs(cost_usd) > 0 and abs(fee_usd) / max(abs(cost_usd), 1e-9) > self.cfg.max_bad_slippage_cents / 100.0:

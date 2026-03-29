@@ -180,6 +180,15 @@ def test_forced_time_exit_at_three_minutes():
     assert "forced time exit" in decision.reason.lower()
 
 
+def test_blocks_reentry_after_completed_round_trip_same_market():
+    cfg = MID_CFG.model_copy(update={"vol_bwk_enabled": False})
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, last_completed_ticker="KXBTC15M-TEST-15", market_round_trip_complete=True)
+    decision = agent.evaluate(make_snapshot(ticker="KXBTC15M-TEST-15", yes_bid_cents=58, yes_ask_cents=59), risk)
+    assert decision.decision == "NO TRADE"
+    assert "already completed" in decision.reason.lower()
+
+
 def test_sell_trade_logs_realized_pnl(tmp_path):
     from kalshi_cricket_tracker.execution.btc15m import CandidateDecision
 
