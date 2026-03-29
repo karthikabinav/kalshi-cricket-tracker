@@ -14,17 +14,20 @@ Paper-first execution-service scaffold for the Kalshi BTC 15-minute strategy des
   - `CAUTION`
   - `ENTER`
 - paper-mode order manager stub with unrealized PnL calculation
-- stub adapters for Binance BTC feed and Kalshi market access
-- Vitest suite covering config, derivatives, signals, and paper order flow
+- live Binance BTC trade stream adapter for paper mode with reconnect/backoff + stale-stream reset
+- paper Kalshi adapter stub for market resolution / snapshots while auth and live orderbook work remain gated
+- runtime loop that ingests Binance ticks, waits for enough samples, then evaluates paper decisions on an interval
+- Vitest suite covering config, feed parsing/reconnect behavior, derivatives, runtime flow, signals, and paper order flow
 
 ## Layout
 - `src/config/env.ts` - env schema and typed config
 - `src/core/derivatives.ts` - rolling price-buffer derivatives
 - `src/core/signals.ts` - pure signal logic
 - `src/order/paperOrderManager.ts` - paper execution state machine
-- `src/adapters/binanceFeed.ts` - Binance adapter stub
+- `src/adapters/binanceFeed.ts` - live Binance trade stream adapter
 - `src/adapters/kalshi.ts` - Kalshi adapter interface + paper stub
-- `src/index.ts` - bootstrap/runtime skeleton
+- `src/runtime.ts` - paper runtime orchestration
+- `src/index.ts` - bootstrap/runtime entrypoint
 - `test/*.test.ts` - unit tests
 
 ## Run locally
@@ -37,7 +40,14 @@ npm run build
 npm run dev
 ```
 
-## Notes
-- `SERVICE_MODE=paper` is the intended default for this phase.
-- No live Kalshi submission is implemented or enabled in this pass.
-- Zeabur-friendly deployment hooks (health endpoint, Docker/package wiring, live runtime loop) are intentionally deferred until paper validation is satisfactory.
+## Important constraints
+- `SERVICE_MODE=paper` is the only allowed mode in this phase.
+- No live Kalshi submission is implemented or enabled.
+- Kalshi market access remains stubbed/paper until auth/orderbook work is explicitly completed.
+- Runtime output is structured JSON so paper runs can be tailed and audited.
+
+## Key runtime env vars
+- `MIN_PRICE_SAMPLES` - minimum Binance ticks before the first evaluation cycle
+- `EVAL_INTERVAL_MS` - paper decision loop interval
+- `BINANCE_RECONNECT_BASE_MS` / `BINANCE_RECONNECT_MAX_MS` - reconnect backoff window
+- `BINANCE_STALE_THRESHOLD_MS` - force reconnect if the stream goes quiet too long

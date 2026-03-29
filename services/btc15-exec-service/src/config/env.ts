@@ -21,7 +21,12 @@ const envSchema = z.object({
   FORCE_EXIT_REMAINING_SEC: z.coerce.number().int().positive().default(180),
   KALSHI_ENV: z.string().default('demo'),
   KALSHI_MARKET_PREFIX: z.string().default('KXBTCD-'),
-  PAPER_DEFAULT_SIZE: z.coerce.number().positive().default(10)
+  PAPER_DEFAULT_SIZE: z.coerce.number().positive().default(10),
+  EVAL_INTERVAL_MS: z.coerce.number().int().positive().default(1000),
+  MIN_PRICE_SAMPLES: z.coerce.number().int().positive().default(5),
+  BINANCE_RECONNECT_BASE_MS: z.coerce.number().int().positive().default(1000),
+  BINANCE_RECONNECT_MAX_MS: z.coerce.number().int().positive().default(15000),
+  BINANCE_STALE_THRESHOLD_MS: z.coerce.number().int().positive().default(20000)
 });
 
 export type AppConfig = {
@@ -42,6 +47,11 @@ export type AppConfig = {
   kalshiEnv: string;
   kalshiMarketPrefix: string;
   paperDefaultSize: number;
+  evalIntervalMs: number;
+  minPriceSamples: number;
+  binanceReconnectBaseMs: number;
+  binanceReconnectMaxMs: number;
+  binanceStaleThresholdMs: number;
 };
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -63,6 +73,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     forceExitRemainingSec: env.FORCE_EXIT_REMAINING_SEC,
     kalshiEnv: env.KALSHI_ENV,
     kalshiMarketPrefix: env.KALSHI_MARKET_PREFIX,
-    paperDefaultSize: env.PAPER_DEFAULT_SIZE
+    paperDefaultSize: env.PAPER_DEFAULT_SIZE,
+    evalIntervalMs: env.EVAL_INTERVAL_MS,
+    minPriceSamples: env.MIN_PRICE_SAMPLES,
+    binanceReconnectBaseMs: env.BINANCE_RECONNECT_BASE_MS,
+    binanceReconnectMaxMs: env.BINANCE_RECONNECT_MAX_MS,
+    binanceStaleThresholdMs: env.BINANCE_STALE_THRESHOLD_MS
   };
 }

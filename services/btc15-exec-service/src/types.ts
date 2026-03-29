@@ -59,3 +59,11 @@ export interface PaperOrderEvent {
   pnlDollars?: number;
   reason: string;
 }
+
+export interface RuntimeCycleResult {
+  ticker: string;
+  market: MarketSnapshot;
+  derivatives: DerivativesSnapshot;
+  decision: SignalDecision;
+  event: PaperOrderEvent;
+}
