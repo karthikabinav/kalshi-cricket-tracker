@@ -263,10 +263,12 @@ def btc15m_paper_run_market(
     max_runtime_seconds: int = typer.Option(900, help="Max runtime for one market worker"),
     poll_seconds: float = typer.Option(2.0, help="Polling interval seconds"),
     risk_json: str | None = typer.Option(None, help="Optional risk-state path"),
+    artifact_dir: str | None = typer.Option(None, help="Optional artifact directory override"),
+    clean_start: bool = typer.Option(False, help="Initialize a fresh risk state before running this market"),
     config: str = "configs/default.yaml",
 ):
     cfg = load_config(config)
-    result = run_market_worker(cfg, ticker=ticker, max_runtime_seconds=max_runtime_seconds, poll_seconds=poll_seconds, risk_json=risk_json)
+    result = run_market_worker(cfg, ticker=ticker, max_runtime_seconds=max_runtime_seconds, poll_seconds=poll_seconds, risk_json=risk_json, artifact_dir=artifact_dir, clean_start=clean_start)
     print(json.dumps(result.__dict__, indent=2))
 
 
@@ -277,6 +279,9 @@ def btc15m_paper_supervisor(
     poll_seconds: float = typer.Option(2.0, help="Polling interval seconds"),
     start_with_next_market: bool = typer.Option(False, help="Wait for the next BTC15m market rather than attaching to the current earliest open market"),
     discovery_timeout_seconds: int | None = typer.Option(None, help="Optional timeout while waiting for the next discoverable BTC15m market"),
+    risk_json: str | None = typer.Option(None, help="Optional risk-state path shared across this supervisor run"),
+    artifact_dir: str | None = typer.Option(None, help="Optional artifact directory override for this supervisor run"),
+    clean_start: bool = typer.Option(False, help="Initialize a fresh risk state before the first market worker"),
     config: str = "configs/default.yaml",
 ):
     cfg = load_config(config)
@@ -287,6 +292,9 @@ def btc15m_paper_supervisor(
         max_runtime_seconds=max_runtime_seconds,
         start_with_next_market=start_with_next_market,
         discovery_timeout_seconds=discovery_timeout_seconds,
+        risk_json=risk_json,
+        artifact_dir=artifact_dir,
+        clean_start=clean_start,
     )
     print(json.dumps([r.__dict__ for r in results], indent=2))
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from kalshi_cricket_tracker.config import AppConfig
-from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, BTC15mMarketSnapshot, discover_btc15m_tickers, fetch_live_snapshot, load_risk_state
+from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, BTC15mMarketSnapshot, RiskState, discover_btc15m_tickers, fetch_live_snapshot, load_risk_state, save_risk_state
 from kalshi_cricket_tracker.execution.kalshi import KalshiRestClient, MockKalshiPaperClient
 
 
@@ -103,13 +103,29 @@ def finalize_market_run(
     return summary_path, learning_path
 
 
+def _cfg_with_artifact_dir(cfg: AppConfig, artifact_dir: str | Path | None) -> AppConfig:
+    if artifact_dir is None:
+        return cfg
+    return cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"artifact_dir": str(artifact_dir)})})
+
+
+
+def _initialize_clean_risk_state(cfg: AppConfig, risk_path: Path) -> None:
+    risk_path.parent.mkdir(parents=True, exist_ok=True)
+    save_risk_state(risk_path, RiskState(current_capital_usd=cfg.btc15m.initial_capital_usd))
+
+
+
 def run_market_worker(
     cfg: AppConfig,
     ticker: str | None = None,
     max_runtime_seconds: int = 900,
     poll_seconds: float = 2.0,
     risk_json: str | None = None,
+    artifact_dir: str | None = None,
+    clean_start: bool = False,
 ) -> WorkerResult:
+    cfg = _cfg_with_artifact_dir(cfg, artifact_dir)
     artifact_root = Path(cfg.runtime.artifact_dir)
     artifact_root.mkdir(parents=True, exist_ok=True)
     client = KalshiRestClient.public(cfg.trading)
@@ -117,6 +133,8 @@ def run_market_worker(
     market_ticker = snapshot.ticker
     started = datetime.now(timezone.utc)
     risk_path = Path(risk_json) if risk_json else artifact_root / cfg.btc15m.risk_state_json
+    if clean_start:
+        _initialize_clean_risk_state(cfg, risk_path)
     agent = BTC15mExecutionAgent(cfg.btc15m)
     paper_client = MockKalshiPaperClient()
 
@@ -214,7 +232,11 @@ def run_supervisor(
     max_runtime_seconds: int = 900,
     start_with_next_market: bool = False,
     discovery_timeout_seconds: int | None = None,
+    risk_json: str | None = None,
+    artifact_dir: str | None = None,
+    clean_start: bool = False,
 ) -> list[WorkerResult]:
+    cfg = _cfg_with_artifact_dir(cfg, artifact_dir)
     results: list[WorkerResult] = []
     seen: set[str] = set()
     client = KalshiRestClient.public(cfg.trading)
@@ -241,6 +263,9 @@ def run_supervisor(
                 ticker=snapshot.ticker,
                 max_runtime_seconds=max_runtime_seconds,
                 poll_seconds=poll_seconds,
+                risk_json=risk_json,
+                artifact_dir=artifact_dir,
+                clean_start=clean_start and not results,
             )
         )
         after_close_time = snapshot.close_time
