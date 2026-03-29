@@ -46,7 +46,12 @@ def _market_dir(cfg: AppConfig, ticker: str) -> Path:
     return Path(cfg.runtime.artifact_dir) / "markets" / _safe_slug(ticker)
 
 
-def finalize_market_run(cfg: AppConfig, ticker: str, root_artifact_dir: str | Path | None = None) -> tuple[Path, Path]:
+def finalize_market_run(
+    cfg: AppConfig,
+    ticker: str,
+    root_artifact_dir: str | Path | None = None,
+    risk_state_path: str | Path | None = None,
+) -> tuple[Path, Path]:
     artifact_root = Path(root_artifact_dir or cfg.runtime.artifact_dir)
     market_dir = artifact_root / "markets" / _safe_slug(ticker)
     market_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +59,8 @@ def finalize_market_run(cfg: AppConfig, ticker: str, root_artifact_dir: str | Pa
     trades = _read_jsonl(artifact_root / cfg.btc15m.executed_log_jsonl)
     decisions = _read_jsonl(artifact_root / cfg.btc15m.candidate_log_jsonl)
     state_trace = _read_jsonl(artifact_root / cfg.btc15m.state_log_jsonl)
-    risk_state = _read_json(artifact_root / cfg.btc15m.risk_state_json)
+    risk_path = Path(risk_state_path) if risk_state_path is not None else artifact_root / cfg.btc15m.risk_state_json
+    risk_state = _read_json(risk_path)
 
     market_trades = [t for t in trades if t.get("ticker") == ticker]
     market_decisions = [d for d in decisions if d.get("ticker") == ticker]
@@ -130,7 +136,7 @@ def run_market_worker(
         sleep_s = 1.0 if mins_left <= cfg.btc15m.max_time_to_close_min else poll_seconds
         time.sleep(max(0.5, sleep_s))
 
-    summary_path, learning_path = finalize_market_run(cfg, market_ticker, artifact_root)
+    summary_path, learning_path = finalize_market_run(cfg, market_ticker, artifact_root, risk_state_path=risk_path)
     try:
         import subprocess
         subprocess.run(
