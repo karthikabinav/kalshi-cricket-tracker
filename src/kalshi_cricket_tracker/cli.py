@@ -275,10 +275,19 @@ def btc15m_paper_supervisor(
     markets: int = typer.Option(1, help="Number of sequential markets to process"),
     max_runtime_seconds: int = typer.Option(900, help="Max runtime per market worker"),
     poll_seconds: float = typer.Option(2.0, help="Polling interval seconds"),
+    start_with_next_market: bool = typer.Option(False, help="Wait for the next BTC15m market rather than attaching to the current earliest open market"),
+    discovery_timeout_seconds: int | None = typer.Option(None, help="Optional timeout while waiting for the next discoverable BTC15m market"),
     config: str = "configs/default.yaml",
 ):
     cfg = load_config(config)
-    results = run_supervisor(cfg, markets=markets, poll_seconds=poll_seconds, max_runtime_seconds=max_runtime_seconds)
+    results = run_supervisor(
+        cfg,
+        markets=markets,
+        poll_seconds=poll_seconds,
+        max_runtime_seconds=max_runtime_seconds,
+        start_with_next_market=start_with_next_market,
+        discovery_timeout_seconds=discovery_timeout_seconds,
+    )
     print(json.dumps([r.__dict__ for r in results], indent=2))
 
 

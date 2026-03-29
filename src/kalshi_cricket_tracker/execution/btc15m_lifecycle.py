@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from kalshi_cricket_tracker.config import AppConfig
-from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, fetch_live_snapshot, load_risk_state
+from kalshi_cricket_tracker.execution.btc15m import BTC15mExecutionAgent, BTC15mMarketSnapshot, discover_btc15m_tickers, fetch_live_snapshot, load_risk_state
 from kalshi_cricket_tracker.execution.kalshi import KalshiRestClient, MockKalshiPaperClient
 
 
@@ -170,16 +170,78 @@ def run_market_worker(
     )
 
 
-def run_supervisor(cfg: AppConfig, markets: int = 1, poll_seconds: float = 2.0, max_runtime_seconds: int = 900) -> list[WorkerResult]:
+def _discover_candidate_snapshots(
+    client: KalshiRestClient,
+    limit: int = 5,
+) -> list[BTC15mMarketSnapshot]:
+    snapshots: list[BTC15mMarketSnapshot] = []
+    for ticker in discover_btc15m_tickers(client, limit=limit)[:limit]:
+        try:
+            snapshots.append(fetch_live_snapshot(client, ticker=ticker))
+        except Exception:
+            continue
+    snapshots.sort(key=lambda snap: snap.close_time)
+    return snapshots
+
+
+def wait_for_market_snapshot(
+    cfg: AppConfig,
+    client: KalshiRestClient,
+    after_close_time: datetime | None = None,
+    exclude_tickers: set[str] | None = None,
+    poll_seconds: float = 2.0,
+    max_wait_seconds: int | None = None,
+) -> BTC15mMarketSnapshot:
+    deadline = time.monotonic() + max_wait_seconds if max_wait_seconds is not None else None
+    excluded = exclude_tickers or set()
+    while True:
+        for snapshot in _discover_candidate_snapshots(client):
+            if snapshot.ticker in excluded:
+                continue
+            if after_close_time is not None and snapshot.close_time <= after_close_time:
+                continue
+            return snapshot
+        if deadline is not None and time.monotonic() >= deadline:
+            anchor = after_close_time.isoformat() if after_close_time else "<none>"
+            raise RuntimeError(f"No BTC15m market discovered after {anchor} within {max_wait_seconds}s.")
+        time.sleep(max(1.0, poll_seconds))
+
+
+def run_supervisor(
+    cfg: AppConfig,
+    markets: int = 1,
+    poll_seconds: float = 2.0,
+    max_runtime_seconds: int = 900,
+    start_with_next_market: bool = False,
+    discovery_timeout_seconds: int | None = None,
+) -> list[WorkerResult]:
     results: list[WorkerResult] = []
     seen: set[str] = set()
     client = KalshiRestClient.public(cfg.trading)
+
+    after_close_time: datetime | None = None
+    if start_with_next_market:
+        anchor = wait_for_market_snapshot(cfg, client, poll_seconds=poll_seconds, max_wait_seconds=discovery_timeout_seconds)
+        seen.add(anchor.ticker)
+        after_close_time = anchor.close_time
+
     while len(results) < markets:
-        snapshot = fetch_live_snapshot(client)
-        ticker = snapshot.ticker
-        if ticker in seen:
-            time.sleep(max(1.0, poll_seconds))
-            continue
-        seen.add(ticker)
-        results.append(run_market_worker(cfg, ticker=ticker, max_runtime_seconds=max_runtime_seconds, poll_seconds=poll_seconds))
+        snapshot = wait_for_market_snapshot(
+            cfg,
+            client,
+            after_close_time=after_close_time,
+            exclude_tickers=seen,
+            poll_seconds=poll_seconds,
+            max_wait_seconds=discovery_timeout_seconds,
+        )
+        seen.add(snapshot.ticker)
+        results.append(
+            run_market_worker(
+                cfg,
+                ticker=snapshot.ticker,
+                max_runtime_seconds=max_runtime_seconds,
+                poll_seconds=poll_seconds,
+            )
+        )
+        after_close_time = snapshot.close_time
     return results
