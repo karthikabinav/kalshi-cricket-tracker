@@ -162,6 +162,66 @@ def test_btc15m_manual_paper_state_machine_buy_then_sell_updates_inventory_and_c
     assert risk_after_sell.realized_round_trip_pnl_usd > 0
 
 
+def test_btc15m_manual_paper_hard_stop_exits_before_three_minute_cutoff():
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, stop_loss_cents=3)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0, inventory_state="LONG_YES", inventory_qty=10, entry_price_cents=59.0)
+
+    stop_snapshot = make_snapshot(
+        close_time=datetime.now(timezone.utc) + timedelta(minutes=6),
+        yes_bid_cents=55,
+        yes_ask_cents=56,
+        no_bid_cents=44,
+        no_ask_cents=45,
+        current_position_side="YES",
+        current_position_entry_cents=59,
+    )
+    decision = agent.evaluate(stop_snapshot, risk)
+    assert decision.decision == "NO TRADE"
+    assert decision.action == "sell_yes"
+    assert "hard stop" in decision.reason.lower()
+    assert decision.time_remaining_min > 3.0
+
+
+def test_btc15m_manual_paper_hard_stop_persists_flat_state_after_exit(tmp_path):
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, stop_loss_cents=3)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(
+        current_capital_usd=94.1,
+        reserved_capital_usd=5.9,
+        inventory_state="LONG_YES",
+        inventory_qty=10,
+        entry_price_cents=59.0,
+        entry_notional_usd=5.9,
+        open_positions=1,
+    )
+
+    stop_snapshot = make_snapshot(
+        close_time=datetime.now(timezone.utc) + timedelta(minutes=6),
+        yes_bid_cents=55,
+        yes_ask_cents=56,
+        no_bid_cents=44,
+        no_ask_cents=45,
+        current_position_side="YES",
+        current_position_entry_cents=59,
+    )
+    decision = agent.evaluate(stop_snapshot, risk)
+    out = agent.execute_candidate(
+        decision,
+        MockKalshiPaperClient(),
+        tmp_path,
+        live_enabled=False,
+        risk=risk,
+        persist_state_path=tmp_path / cfg.risk_state_json,
+    )
+
+    assert out is not None
+    saved_risk = RiskState(**json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8")))
+    assert saved_risk.inventory_state == "FLAT"
+    assert saved_risk.open_positions == 0
+    assert saved_risk.realized_round_trip_pnl_usd < 0
+
+
 def test_btc15m_manual_paper_entry_blocked_by_btc_trend_filter_against_yes():
     cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
     agent = BTC15mExecutionAgent(cfg)

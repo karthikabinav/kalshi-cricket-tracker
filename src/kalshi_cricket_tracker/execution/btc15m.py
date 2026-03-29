@@ -362,6 +362,8 @@ class BTC15mExecutionAgent:
         score_cents = 0.0
         rationale = f"manual state machine idle: no side offered at or below {self.cfg.manual_entry_cents}c"
         unrealized_cents = 0.0
+        realizable_cents = 0.0
+        stop_loss_usd = 0.0
 
         if inventory_state == "FLAT":
             candidates: list[tuple[int, Literal["YES", "NO"], int]] = []
@@ -391,15 +393,30 @@ class BTC15mExecutionAgent:
             next_state = inventory_state
             unrealized_cents = mark_bid - entry_cents
             unrealized_profit_usd = qty * unrealized_cents / 100.0
-            rationale = f"manual hold: waiting for ${self.cfg.manual_profit_target_usd:.2f} paper PnL target or 3-minute forced exit"
-            should_exit_for_profit = unrealized_profit_usd >= self.cfg.manual_profit_target_usd
+            fee_cents = mark_bid * entry_fee_rate
+            realizable_cents = unrealized_cents - fee_cents
+            realizable_profit_usd = qty * realizable_cents / 100.0
+            stop_loss_usd = qty * self.cfg.stop_loss_cents / 100.0
+            rationale = (
+                f"manual hold: waiting for ${self.cfg.manual_profit_target_usd:.2f} paper PnL target, "
+                f"-${stop_loss_usd:.2f} hard stop, or 3-minute forced exit"
+            )
+            should_exit_for_profit = realizable_profit_usd >= self.cfg.manual_profit_target_usd
+            should_exit_for_stop = unrealized_profit_usd <= -stop_loss_usd or realizable_profit_usd <= -stop_loss_usd
             should_exit_for_time = mins_left <= self.cfg.min_time_to_close_min
-            if should_exit_for_profit or should_exit_for_time:
-                fee_cents = mark_bid * entry_fee_rate
+            if should_exit_for_profit or should_exit_for_stop or should_exit_for_time:
                 cost_cents = -mark_bid
-                reward_cents = unrealized_cents - fee_cents
+                reward_cents = realizable_cents
                 score_cents = reward_cents
-                exit_reason = f"net paper PnL ${qty * reward_cents / 100.0:.2f}"
+                if should_exit_for_stop:
+                    exit_reason = (
+                        f"hard stop hit: unrealized ${unrealized_profit_usd:.2f}, "
+                        f"realizable ${realizable_profit_usd:.2f}, threshold -${stop_loss_usd:.2f}"
+                    )
+                elif should_exit_for_profit:
+                    exit_reason = f"net paper PnL ${realizable_profit_usd:.2f}"
+                else:
+                    exit_reason = f"3-minute cutoff with net paper PnL ${realizable_profit_usd:.2f}"
                 rationale = f"manual exit: sell {side} at {mark_bid}c with {exit_reason}"
                 action = "sell_yes" if is_yes else "sell_no"
                 next_state = "FLAT"
@@ -444,6 +461,8 @@ class BTC15mExecutionAgent:
             "manual_rationale": rationale,
             "manual_target_exit_cents": target_exit_cents,
             "unrealized_cents": unrealized_cents,
+            "realizable_cents": realizable_cents if inventory_state != "FLAT" else 0.0,
+            "stop_loss_usd": stop_loss_usd if inventory_state != "FLAT" else 0.0,
             "btc_basis_source": basis_source,
             "btc_basis_value": current_basis,
             "btc_basis_slope": slope,
@@ -574,6 +593,8 @@ class BTC15mExecutionAgent:
             return abstain(blocked_reason, confidence=confidence, extra=extra)
         if action not in {"ENTER_LONG_YES", "ENTER_LONG_NO"}:
             if action == "EXIT":
+                if self._manual_paper_enabled() and manual_info.get("manual_rationale"):
+                    return abstain(str(manual_info["manual_rationale"]), confidence=confidence, extra=extra)
                 return abstain("Open-position EV turned negative or timing/rule checks deteriorated; exit is preferred.", confidence=confidence, extra=extra)
             if self._manual_paper_enabled() and manual_info.get("manual_rationale"):
                 return abstain(str(manual_info["manual_rationale"]), confidence=confidence, extra=extra)
