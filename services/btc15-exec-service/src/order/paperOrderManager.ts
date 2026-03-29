@@ -10,11 +10,19 @@ export class PaperOrderManager {
     return this.position;
   }
 
+  private getEntryPrice(side: PositionState['side'], market: MarketSnapshot): number {
+    return side === 'YES' ? market.yesAskCents : market.noAskCents;
+  }
+
+  private getExitPrice(side: PositionState['side'], market: MarketSnapshot): number {
+    return side === 'YES' ? market.yesBidCents : market.noBidCents;
+  }
+
   computeUnrealizedPnl(market: MarketSnapshot): number {
     if (!this.position) {
       return 0;
     }
-    const markCents = this.position.side === 'YES' ? market.yesAskCents : market.noAskCents;
+    const markCents = this.getExitPrice(this.position.side, market);
     return ((markCents - this.position.entryPriceCents) * this.position.quantity) / 100;
   }
 
@@ -23,7 +31,7 @@ export class PaperOrderManager {
       this.position = {
         marketTicker: market.marketTicker,
         side: decision.side,
-        entryPriceCents: decision.side === 'YES' ? market.yesAskCents : market.noAskCents,
+        entryPriceCents: this.getEntryPrice(decision.side, market),
         quantity: this.config.paperDefaultSize,
         enteredAtMs: nowMs
       };
@@ -38,12 +46,13 @@ export class PaperOrderManager {
     }
 
     if (['FORCE_EXIT', 'TAKE_PROFIT', 'STOP_LOSS'].includes(decision.action) && this.position) {
+      const exitPriceCents = this.getExitPrice(this.position.side, market);
       const pnlDollars = this.computeUnrealizedPnl(market);
       const event: PaperOrderEvent = {
         type: 'EXIT',
         marketTicker: market.marketTicker,
         side: this.position.side,
-        priceCents: this.position.side === 'YES' ? market.yesAskCents : market.noAskCents,
+        priceCents: exitPriceCents,
         quantity: this.position.quantity,
         pnlDollars,
         reason: decision.reason

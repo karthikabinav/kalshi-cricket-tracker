@@ -13,7 +13,7 @@ Paper-first execution-service scaffold for the Kalshi BTC 15-minute strategy des
   - `WAIT`
   - `CAUTION`
   - `ENTER`
-- paper-mode order manager stub with unrealized PnL calculation
+- paper-mode order manager stub with explicit bid-side exit / unrealized PnL handling for take-profit, stop-loss, and time-stop exits
 - live Binance BTC trade stream adapter for paper mode with reconnect/backoff + stale-stream reset
 - paper Kalshi adapter stub for market resolution / snapshots while auth and live orderbook work remain gated
 - runtime loop that ingests Binance ticks, waits for enough samples, then evaluates paper decisions on an interval

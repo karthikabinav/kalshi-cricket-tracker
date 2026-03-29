@@ -17,7 +17,9 @@ function baseContext(): SignalContext {
   return {
     market: {
       marketTicker: 'KXBTCD-TEST',
+      yesBidCents: 59,
       yesAskCents: 60,
+      noBidCents: 39,
       noAskCents: 40,
       timeRemainingSec: 420
     },
@@ -50,6 +52,22 @@ describe('evaluateSignal', () => {
     };
     const decision = evaluateSignal(context, config);
     expect(decision.action).toBe('FORCE_EXIT');
+  });
+
+  it('takes stop-loss before waiting when unrealized PnL breaches the hard floor', () => {
+    const context = baseContext();
+    context.position = {
+      marketTicker: 'KXBTCD-TEST',
+      side: 'YES',
+      entryPriceCents: 60,
+      quantity: 100,
+      enteredAtMs: 0
+    };
+    context.unrealizedPnlDollars = -16;
+
+    const decision = evaluateSignal(context, config);
+
+    expect(decision).toEqual({ action: 'STOP_LOSS', reason: 'stop-loss reached' });
   });
 
   it('returns caution when price band is met without momentum confirmation', () => {

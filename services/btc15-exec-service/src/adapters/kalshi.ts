@@ -17,7 +17,9 @@ export class PaperKalshiAdapter implements KalshiAdapter {
   async getMarketSnapshot(ticker: string): Promise<MarketSnapshot> {
     return {
       marketTicker: ticker,
+      yesBidCents: 59,
       yesAskCents: 60,
+      noBidCents: 39,
       noAskCents: 40,
       timeRemainingSec: 420
     };

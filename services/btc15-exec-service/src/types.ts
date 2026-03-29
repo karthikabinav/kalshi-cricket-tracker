@@ -16,7 +16,9 @@ export interface DerivativesSnapshot {
 
 export interface MarketSnapshot {
   marketTicker: string;
+  yesBidCents: number;
   yesAskCents: number;
+  noBidCents: number;
   noAskCents: number;
   timeRemainingSec: number;
 }
