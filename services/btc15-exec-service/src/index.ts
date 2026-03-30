@@ -1,13 +1,16 @@
 import { BinanceBtcFeedAdapter } from './adapters/binanceFeed.js';
-import { PaperKalshiAdapter } from './adapters/kalshi.js';
-import { loadConfig } from './config/env.js';
+import { LiveKalshiAdapter, PaperKalshiAdapter, UnimplementedKalshiLiveClient } from './adapters/kalshi.js';
+import { assertLiveModeReady, loadConfig } from './config/env.js';
 import { Btc15Runtime } from './runtime.js';
 
 export async function bootstrap(): Promise<void> {
   const config = loadConfig();
-  if (config.serviceMode !== 'paper') {
-    throw new Error('Only SERVICE_MODE=paper is allowed in this phase');
-  }
+  assertLiveModeReady(config);
+
+  const kalshiAdapter =
+    config.serviceMode === 'live'
+      ? new LiveKalshiAdapter(new UnimplementedKalshiLiveClient(config))
+      : new PaperKalshiAdapter(config.kalshiMarketPrefix);
 
   const runtime = new Btc15Runtime(
     config,
@@ -16,11 +19,18 @@ export async function bootstrap(): Promise<void> {
       reconnectMaxMs: config.binanceReconnectMaxMs,
       staleThresholdMs: config.binanceStaleThresholdMs
     }),
-    new PaperKalshiAdapter(config.kalshiMarketPrefix)
+    kalshiAdapter
   );
 
   await runtime.start();
-  console.log(JSON.stringify({ component: 'bootstrap', serviceMode: config.serviceMode, msg: 'runtime started' }));
+  console.log(
+    JSON.stringify({
+      component: 'bootstrap',
+      serviceMode: config.serviceMode,
+      safety: config.safety,
+      msg: 'runtime started'
+    })
+  );
 
   const interval = setInterval(async () => {
     try {
@@ -36,7 +46,14 @@ export async function bootstrap(): Promise<void> {
         );
         return;
       }
-      console.log(JSON.stringify({ component: 'runtime', serviceMode: config.serviceMode, ...result }));
+      console.log(
+        JSON.stringify({
+          component: 'runtime',
+          serviceMode: config.serviceMode,
+          realizedPnlDollars: runtime.getRealizedPnlDollars(),
+          ...result
+        })
+      );
     } catch (error) {
       console.error(
         JSON.stringify({

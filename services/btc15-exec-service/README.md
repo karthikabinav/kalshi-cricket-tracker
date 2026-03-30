@@ -15,18 +15,20 @@ Paper-first execution-service scaffold for the Kalshi BTC 15-minute strategy des
   - `ENTER`
 - paper-mode order manager stub with explicit bid-side exit / unrealized PnL handling for take-profit, stop-loss, and time-stop exits
 - live Binance BTC trade stream adapter for paper mode with reconnect/backoff + stale-stream reset
-- paper Kalshi adapter stub for market resolution / snapshots while auth and live orderbook work remain gated
+- Kalshi adapter split into paper adapter + live adapter scaffold interface
+- runtime risk guard for emergency stop, market allowlist, max order notional, daily loss cap, and max open positions
 - runtime loop that ingests Binance ticks, waits for enough samples, then evaluates paper decisions on an interval
-- Vitest suite covering config, feed parsing/reconnect behavior, derivatives, runtime flow, signals, and paper order flow
+- Vitest suite covering config safety gates, feed parsing/reconnect behavior, derivatives, runtime flow, signals, and paper order flow
 
 ## Layout
-- `src/config/env.ts` - env schema and typed config
+- `src/config/env.ts` - env schema, typed config, and live-mode readiness assertions
 - `src/core/derivatives.ts` - rolling price-buffer derivatives
+- `src/core/risk.ts` - pre-trade safety/risk controls
 - `src/core/signals.ts` - pure signal logic
 - `src/order/paperOrderManager.ts` - paper execution state machine
 - `src/adapters/binanceFeed.ts` - live Binance trade stream adapter
-- `src/adapters/kalshi.ts` - Kalshi adapter interface + paper stub
-- `src/runtime.ts` - paper runtime orchestration
+- `src/adapters/kalshi.ts` - Kalshi paper adapter + live-client scaffold
+- `src/runtime.ts` - paper runtime orchestration with risk gating
 - `src/index.ts` - bootstrap/runtime entrypoint
 - `test/*.test.ts` - unit tests
 
@@ -41,12 +43,20 @@ npm run dev
 ```
 
 ## Important constraints
-- `SERVICE_MODE=paper` is the only allowed mode in this phase.
-- No live Kalshi submission is implemented or enabled.
-- Kalshi market access remains stubbed/paper until auth/orderbook work is explicitly completed.
+- `MODE=paper` / `SERVICE_MODE=paper` is still the default and safest setting.
+- Live mode now has explicit gates, but real authenticated Kalshi market discovery/order placement remains scaffold-only.
+- `LIVE_TRADING_ENABLED=true` is required in addition to `MODE=live` before the service will even boot into live mode.
+- `EMERGENCY_STOP=true` hard-blocks new live boot and all new entries.
 - Runtime output is structured JSON so paper runs can be tailed and audited.
 
 ## Key runtime env vars
+- `MODE` - preferred explicit execution mode selector (`paper` or `live`)
+- `KALSHI_MARKET_ALLOWLIST` - comma-separated tickers allowed for entry; empty means unrestricted in paper mode
+- `MAX_ORDER_NOTIONAL_DOLLARS` - per-entry notional cap
+- `MAX_DAILY_LOSS_DOLLARS` - blocks new entries once realized losses breach the cap
+- `MAX_OPEN_POSITIONS` - currently should stay `1`; runtime enforces this ceiling
+- `LIVE_TRADING_ENABLED` - secondary live-trading arming switch
+- `EMERGENCY_STOP` - kill switch for live boot and all new entries
 - `MIN_PRICE_SAMPLES` - minimum Binance ticks before the first evaluation cycle
 - `EVAL_INTERVAL_MS` - paper decision loop interval
 - `BINANCE_RECONNECT_BASE_MS` / `BINANCE_RECONNECT_MAX_MS` - reconnect backoff window
