@@ -31,20 +31,20 @@ export interface PositionState {
   enteredAtMs: number;
 }
 
+export interface StrategyState {
+  position: PositionState | null;
+  lastCompletedTicker: string | null;
+  marketRoundTripComplete: boolean;
+}
+
 export interface SignalContext {
   market: MarketSnapshot;
   derivatives: DerivativesSnapshot;
-  position: PositionState | null;
+  state: StrategyState;
   unrealizedPnlDollars: number;
 }
 
-export type SignalAction =
-  | 'FORCE_EXIT'
-  | 'TAKE_PROFIT'
-  | 'STOP_LOSS'
-  | 'WAIT'
-  | 'CAUTION'
-  | 'ENTER';
+export type SignalAction = 'ENTER' | 'EXIT' | 'WAIT';
 
 export interface SignalDecision {
   action: SignalAction;

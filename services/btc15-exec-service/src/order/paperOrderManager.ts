@@ -1,13 +1,25 @@
 import type { AppConfig } from '../config/env.js';
-import type { MarketSnapshot, PaperOrderEvent, PositionState, SignalDecision } from '../types.js';
+import type { MarketSnapshot, PaperOrderEvent, PositionState, SignalDecision, StrategyState } from '../types.js';
 
 export class PaperOrderManager {
-  private position: PositionState | null = null;
+  private state: StrategyState = {
+    position: null,
+    lastCompletedTicker: null,
+    marketRoundTripComplete: false
+  };
 
   constructor(private readonly config: AppConfig) {}
 
   getPosition(): PositionState | null {
-    return this.position;
+    return this.state.position;
+  }
+
+  getState(): StrategyState {
+    return {
+      position: this.state.position ? { ...this.state.position } : null,
+      lastCompletedTicker: this.state.lastCompletedTicker,
+      marketRoundTripComplete: this.state.marketRoundTripComplete
+    };
   }
 
   private getEntryPrice(side: PositionState['side'], market: MarketSnapshot): number {
@@ -19,45 +31,50 @@ export class PaperOrderManager {
   }
 
   computeUnrealizedPnl(market: MarketSnapshot): number {
-    if (!this.position) {
+    if (!this.state.position) {
       return 0;
     }
-    const markCents = this.getExitPrice(this.position.side, market);
-    return ((markCents - this.position.entryPriceCents) * this.position.quantity) / 100;
+    const markCents = this.getExitPrice(this.state.position.side, market);
+    return ((markCents - this.state.position.entryPriceCents) * this.state.position.quantity) / 100;
   }
 
   applyDecision(decision: SignalDecision, market: MarketSnapshot, nowMs = Date.now()): PaperOrderEvent {
-    if (decision.action === 'ENTER' && decision.side && !this.position) {
-      this.position = {
+    if (decision.action === 'ENTER' && decision.side && !this.state.position) {
+      this.state.position = {
         marketTicker: market.marketTicker,
         side: decision.side,
         entryPriceCents: this.getEntryPrice(decision.side, market),
         quantity: this.config.paperDefaultSize,
         enteredAtMs: nowMs
       };
+      if (this.state.lastCompletedTicker !== market.marketTicker) {
+        this.state.marketRoundTripComplete = false;
+      }
       return {
         type: 'ENTER',
         marketTicker: market.marketTicker,
         side: decision.side,
-        priceCents: this.position.entryPriceCents,
-        quantity: this.position.quantity,
+        priceCents: this.state.position.entryPriceCents,
+        quantity: this.state.position.quantity,
         reason: decision.reason
       };
     }
 
-    if (['FORCE_EXIT', 'TAKE_PROFIT', 'STOP_LOSS'].includes(decision.action) && this.position) {
-      const exitPriceCents = this.getExitPrice(this.position.side, market);
+    if (decision.action === 'EXIT' && this.state.position) {
+      const exitPriceCents = this.getExitPrice(this.state.position.side, market);
       const pnlDollars = this.computeUnrealizedPnl(market);
       const event: PaperOrderEvent = {
         type: 'EXIT',
         marketTicker: market.marketTicker,
-        side: this.position.side,
+        side: this.state.position.side,
         priceCents: exitPriceCents,
-        quantity: this.position.quantity,
+        quantity: this.state.position.quantity,
         pnlDollars,
         reason: decision.reason
       };
-      this.position = null;
+      this.state.position = null;
+      this.state.lastCompletedTicker = market.marketTicker;
+      this.state.marketRoundTripComplete = true;
       return event;
     }
 
