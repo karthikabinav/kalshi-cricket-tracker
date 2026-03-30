@@ -46,6 +46,7 @@ npm run dev
 - `MODE=paper` / `SERVICE_MODE=paper` is still the default and safest setting.
 - Live mode now has explicit gates, but real authenticated Kalshi market discovery/order placement remains scaffold-only.
 - `LIVE_TRADING_ENABLED=true` is required in addition to `MODE=live` before the service will even boot into live mode.
+- `LIVE_CONFIRMATION_PHRASE=I_UNDERSTAND_AND_ACCEPT_LIVE_TRADING_RISK` is also required to mirror the Python-side explicit risk acknowledgement gate.
 - `EMERGENCY_STOP=true` hard-blocks new live boot and all new entries.
 - Runtime output is structured JSON so paper runs can be tailed and audited.
 
@@ -56,6 +57,7 @@ npm run dev
 - `MAX_DAILY_LOSS_DOLLARS` - blocks new entries once realized losses breach the cap
 - `MAX_OPEN_POSITIONS` - currently should stay `1`; runtime enforces this ceiling
 - `LIVE_TRADING_ENABLED` - secondary live-trading arming switch
+- `LIVE_CONFIRMATION_PHRASE` - must equal `I_UNDERSTAND_AND_ACCEPT_LIVE_TRADING_RISK` before live boot is allowed
 - `EMERGENCY_STOP` - kill switch for live boot and all new entries
 - `MIN_PRICE_SAMPLES` - minimum Binance ticks before the first evaluation cycle
 - `EVAL_INTERVAL_MS` - paper decision loop interval

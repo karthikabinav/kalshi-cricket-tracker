@@ -4,6 +4,8 @@ import type { ServiceMode } from '../types.js';
 
 loadDotenv();
 
+export const LIVE_CONFIRMATION_PHRASE = 'I_UNDERSTAND_AND_ACCEPT_LIVE_TRADING_RISK';
+
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   SERVICE_MODE: z.enum(['paper', 'live']).optional(),
@@ -28,6 +30,7 @@ const envSchema = z.object({
   BTC_SPOT_SLOPE_THRESHOLD: z.coerce.number().positive().default(25),
   BTC_SPOT_ACCELERATION_THRESHOLD: z.coerce.number().positive().default(10),
   LIVE_TRADING_ENABLED: z.coerce.boolean().default(false),
+  LIVE_CONFIRMATION_PHRASE: z.string().optional(),
   EMERGENCY_STOP: z.coerce.boolean().default(false),
   KALSHI_API_KEY_ID: z.string().optional(),
   KALSHI_PRIVATE_KEY_PATH: z.string().optional(),
@@ -79,6 +82,7 @@ export type AppConfig = {
   binanceStaleThresholdMs: number;
   safety: {
     liveTradingEnabled: boolean;
+    liveConfirmationPhrase?: string;
     emergencyStop: boolean;
     apiKeyId?: string;
     privateKeyPath?: string;
@@ -125,6 +129,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     binanceStaleThresholdMs: env.BINANCE_STALE_THRESHOLD_MS,
     safety: {
       liveTradingEnabled: env.LIVE_TRADING_ENABLED,
+      liveConfirmationPhrase: env.LIVE_CONFIRMATION_PHRASE,
       emergencyStop: env.EMERGENCY_STOP,
       apiKeyId: env.KALSHI_API_KEY_ID,
       privateKeyPath: env.KALSHI_PRIVATE_KEY_PATH,
@@ -145,6 +150,9 @@ export function assertLiveModeReady(config: AppConfig): void {
   }
   if (!config.safety.liveTradingEnabled) {
     throw new Error('SERVICE_MODE=live requires LIVE_TRADING_ENABLED=true');
+  }
+  if (config.safety.liveConfirmationPhrase !== LIVE_CONFIRMATION_PHRASE) {
+    throw new Error('SERVICE_MODE=live requires LIVE_CONFIRMATION_PHRASE to match the exact risk acknowledgement string');
   }
   if (config.safety.emergencyStop) {
     throw new Error('SERVICE_MODE=live blocked while EMERGENCY_STOP=true');

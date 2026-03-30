@@ -101,6 +101,7 @@ Current phase: convert the PDF into an implementable engineering work order and 
 ## Safety controls added in the current Node pass
 - explicit `MODE=paper|live` selector, with `paper` as the default and `SERVICE_MODE` kept as a backwards-compatible alias
 - secondary live arming gate via `LIVE_TRADING_ENABLED=true`
+- explicit live-risk acknowledgement via `LIVE_CONFIRMATION_PHRASE=I_UNDERSTAND_AND_ACCEPT_LIVE_TRADING_RISK`
 - live boot refusal when `EMERGENCY_STOP=true`
 - required non-empty `KALSHI_MARKET_ALLOWLIST` before live boot
 - runtime entry guards for:
