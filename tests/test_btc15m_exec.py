@@ -257,6 +257,43 @@ def test_btc15m_manual_paper_entry_allowed_when_btc_trend_reverses_for_yes():
 
 
 
+def test_btc15m_manual_paper_replay_path_updates_btc_slope_state_and_blocks_later_entry(tmp_path):
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0)
+    client = MockKalshiPaperClient()
+    risk_path = tmp_path / "risk.json"
+
+    snapshots = [
+        make_snapshot(yes_bid_cents=58, yes_ask_cents=59, no_bid_cents=41, no_ask_cents=42, btc_spot=100000.0),
+        make_snapshot(yes_bid_cents=58, yes_ask_cents=59, no_bid_cents=41, no_ask_cents=42, btc_spot=100020.0),
+        make_snapshot(yes_bid_cents=58, yes_ask_cents=59, no_bid_cents=41, no_ask_cents=42, btc_spot=100060.0),
+    ]
+
+    first = agent.evaluate(snapshots[0], risk)
+    assert first.decision == "TRADE"
+    assert first.action == "buy_yes"
+    agent.execute_candidate(first, client, tmp_path, live_enabled=False, risk=risk, persist_state_path=risk_path)
+    risk = RiskState(**json.loads(risk_path.read_text(encoding="utf-8")))
+    assert risk.last_btc_basis == 100000.0
+    assert risk.last_btc_slope is None
+
+    second = agent.evaluate(snapshots[1], risk)
+    assert second.decision == "NO TRADE"
+    assert second.action == "hold_position"
+    agent.execute_candidate(second, client, tmp_path, live_enabled=False, risk=risk, persist_state_path=risk_path)
+    risk = RiskState(**json.loads(risk_path.read_text(encoding="utf-8")))
+    assert risk.last_btc_basis == 100020.0
+    assert risk.last_btc_slope == 20.0
+
+    forced_flat = RiskState(**{**risk.__dict__, "inventory_state": "FLAT", "inventory_qty": 0, "entry_price_cents": None, "open_positions": 0, "reserved_capital_usd": 0.0})
+    third = agent.evaluate(snapshots[2], forced_flat)
+    assert third.decision == "NO TRADE"
+    assert third.action == "skip"
+    assert "trend filter blocked yes" in third.reason.lower()
+
+
+
 def test_load_snapshot_sequence_supports_jsonl(tmp_path):
     payload = [
         {**make_snapshot(snapshot_index=0, snapshot_sequence_id="seq-1").__dict__, "close_time": make_snapshot().close_time.isoformat()},
