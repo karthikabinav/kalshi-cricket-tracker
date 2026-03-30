@@ -114,7 +114,7 @@ def test_btc15m_logs_candidate_trade_and_state(tmp_path):
 def test_btc15m_manual_paper_state_machine_buy_then_sell_updates_inventory_and_capital(tmp_path):
     cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
     agent = BTC15mExecutionAgent(cfg)
-    risk = RiskState(current_capital_usd=100.0)
+    risk = RiskState(current_capital_usd=100.0, pending_entry_side="YES", pending_entry_count=1)
 
     entry = make_snapshot(
         yes_bid_cents=58,
@@ -243,7 +243,7 @@ def test_btc15m_manual_paper_entry_blocked_by_btc_trend_filter_against_yes():
 def test_btc15m_manual_paper_entry_allowed_when_btc_trend_reverses_for_yes():
     cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
     agent = BTC15mExecutionAgent(cfg)
-    risk = RiskState(current_capital_usd=100.0, prev_btc_basis=100000.0, last_btc_basis=100030.0, last_btc_slope=30.0)
+    risk = RiskState(current_capital_usd=100.0, prev_btc_basis=100000.0, last_btc_basis=100030.0, last_btc_slope=30.0, pending_entry_side="YES", pending_entry_count=1)
     snapshot = make_snapshot(
         yes_bid_cents=58,
         yes_ask_cents=59,
@@ -258,7 +258,7 @@ def test_btc15m_manual_paper_entry_allowed_when_btc_trend_reverses_for_yes():
 
 
 def test_btc15m_manual_paper_replay_path_updates_btc_slope_state_and_blocks_later_entry(tmp_path):
-    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0)
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, signal_persistence_ticks=2)
     agent = BTC15mExecutionAgent(cfg)
     risk = RiskState(current_capital_usd=100.0)
     client = MockKalshiPaperClient()
@@ -271,16 +271,18 @@ def test_btc15m_manual_paper_replay_path_updates_btc_slope_state_and_blocks_late
     ]
 
     first = agent.evaluate(snapshots[0], risk)
-    assert first.decision == "TRADE"
-    assert first.action == "buy_yes"
+    assert first.decision == "NO TRADE"
+    assert first.action == "skip"
     agent.execute_candidate(first, client, tmp_path, live_enabled=False, risk=risk, persist_state_path=risk_path)
     risk = RiskState(**json.loads(risk_path.read_text(encoding="utf-8")))
     assert risk.last_btc_basis == 100000.0
     assert risk.last_btc_slope is None
+    assert risk.pending_entry_side == "YES"
+    assert risk.pending_entry_count == 1
 
     second = agent.evaluate(snapshots[1], risk)
-    assert second.decision == "NO TRADE"
-    assert second.action == "hold_position"
+    assert second.decision == "TRADE"
+    assert second.action == "buy_yes"
     agent.execute_candidate(second, client, tmp_path, live_enabled=False, risk=risk, persist_state_path=risk_path)
     risk = RiskState(**json.loads(risk_path.read_text(encoding="utf-8")))
     assert risk.last_btc_basis == 100020.0
@@ -291,6 +293,53 @@ def test_btc15m_manual_paper_replay_path_updates_btc_slope_state_and_blocks_late
     assert third.decision == "NO TRADE"
     assert third.action == "skip"
     assert "trend filter blocked yes" in third.reason.lower()
+
+
+
+def test_btc15m_manual_paper_requires_signal_persistence_before_entry(tmp_path):
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, signal_persistence_ticks=2)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=100.0)
+    snapshot = make_snapshot(yes_bid_cents=58, yes_ask_cents=59, no_bid_cents=41, no_ask_cents=42)
+
+    first = agent.evaluate(snapshot, risk)
+    assert first.decision == "NO TRADE"
+    assert "persistence guard" in first.reason.lower()
+    agent.execute_candidate(first, MockKalshiPaperClient(), tmp_path, live_enabled=False, risk=risk, persist_state_path=tmp_path / cfg.risk_state_json)
+    persisted = RiskState(**json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8")))
+    assert persisted.pending_entry_side == "YES"
+    assert persisted.pending_entry_count == 1
+
+    second = agent.evaluate(snapshot, persisted)
+    assert second.decision == "TRADE"
+    assert second.action == "buy_yes"
+
+
+
+def test_btc15m_manual_paper_hard_stop_can_exit_despite_entry_gates():
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, stop_loss_cents=2, max_spread_cents=3)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=94.1, reserved_capital_usd=5.9, inventory_state="LONG_YES", inventory_qty=10, entry_price_cents=59.0, entry_notional_usd=5.9, open_positions=1)
+    stop_snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=6), yes_bid_cents=56, yes_ask_cents=60, no_bid_cents=40, no_ask_cents=44, current_position_side="YES", current_position_entry_cents=59)
+    decision = agent.evaluate(stop_snapshot, risk)
+    assert decision.action == "sell_yes"
+    assert "hard stop" in decision.reason.lower()
+
+
+
+def test_btc15m_manual_paper_realized_loss_triggers_conservative_cooldown(tmp_path):
+    cfg = BTC15mExecConfig(enabled=True, manual_paper_enabled=True, initial_capital_usd=100.0, adverse_cooldown_ticks=2)
+    agent = BTC15mExecutionAgent(cfg)
+    risk = RiskState(current_capital_usd=94.1, reserved_capital_usd=5.9, inventory_state="LONG_YES", inventory_qty=10, entry_price_cents=59.0, entry_notional_usd=5.9, open_positions=1)
+    stop_snapshot = make_snapshot(close_time=datetime.now(timezone.utc) + timedelta(minutes=6), yes_bid_cents=56, yes_ask_cents=57, no_bid_cents=43, no_ask_cents=44, current_position_side="YES", current_position_entry_cents=59)
+    decision = agent.evaluate(stop_snapshot, risk)
+    agent.execute_candidate(decision, MockKalshiPaperClient(), tmp_path, live_enabled=False, risk=risk, persist_state_path=tmp_path / cfg.risk_state_json)
+    post_loss = RiskState(**json.loads((tmp_path / cfg.risk_state_json).read_text(encoding="utf-8")))
+    assert post_loss.adverse_ticks_remaining == 2
+
+    blocked = agent.evaluate(make_snapshot(yes_bid_cents=58, yes_ask_cents=59, no_bid_cents=41, no_ask_cents=42), post_loss)
+    assert blocked.decision == "NO TRADE"
+    assert "cooldown active" in blocked.reason.lower()
 
 
 

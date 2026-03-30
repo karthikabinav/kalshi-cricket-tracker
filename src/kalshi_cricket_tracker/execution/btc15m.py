@@ -136,6 +136,10 @@ class RiskState:
     last_btc_basis: float | None = None
     prev_btc_basis: float | None = None
     last_btc_slope: float | None = None
+    pending_entry_side: Literal["YES", "NO"] | None = None
+    pending_entry_count: int = 0
+    adverse_ticks_remaining: int = 0
+    last_adverse_reason: str | None = None
 
 
 
@@ -204,7 +208,6 @@ class BTC15mExecutionAgent:
         return max(low, min(high, value))
 
     def _check_tradeable(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> str | None:
-        mins_left = snapshot.time_remaining.total_seconds() / 60.0
         if self.cfg.enabled is False:
             return "BTC 15m execution agent disabled in config; safe default is abstain."
         if "BTC" not in snapshot.ticker.upper():
@@ -213,16 +216,13 @@ class BTC15mExecutionAgent:
             return "Ticker does not look like a BTC 15-minute market."
         if not snapshot.rules.strip():
             return "Market rules missing or empty."
-        if snapshot.status.lower() not in {"open", "active", "trading"}:
+        has_position = snapshot.current_position_side is not None or risk.inventory_state != "FLAT"
+        if snapshot.status.lower() not in {"open", "active", "trading"} and not has_position:
             return f"Market status is {snapshot.status!r}, not open/tradable."
-        if mins_left <= self.cfg.min_time_to_close_min:
-            return "Too close to resolution; no-entry final 3-minute window."
-        if snapshot.spread_cents > self.cfg.max_spread_cents:
-            return "Spread too wide for controlled entry."
-        if snapshot.min_depth < self.cfg.min_depth_contracts:
-            return "Insufficient top-of-book depth."
-        if snapshot.orderbook_stability_bps > self.cfg.max_orderbook_instability_bps:
-            return "Order book is unstable / repricing too fast."
+        if not has_position:
+            entry_gate = self._entry_gate_reason(snapshot, risk)
+            if entry_gate is not None:
+                return entry_gate
         if risk.market_round_trip_complete and risk.last_completed_ticker == snapshot.ticker and snapshot.current_position_side is None and risk.inventory_state == "FLAT":
             return "Round trip for this market already completed."
         if risk.open_positions >= self.cfg.max_simultaneous_positions and snapshot.current_position_side is None and risk.inventory_state == "FLAT":
@@ -231,9 +231,9 @@ class BTC15mExecutionAgent:
             return "Daily loss limit already hit."
         if risk.consecutive_losses >= self.cfg.max_consecutive_losses:
             return "Consecutive loss stop triggered."
-        if risk.trades_last_hour >= self.cfg.max_trades_per_hour:
+        if risk.trades_last_hour >= self.cfg.max_trades_per_hour and not has_position:
             return "Hourly trade limit reached."
-        if risk.two_consecutive_bad_slippage:
+        if risk.two_consecutive_bad_slippage and not has_position:
             return "Recent slippage stop triggered."
         return None
 
@@ -312,6 +312,28 @@ class BTC15mExecutionAgent:
     def _capital_remaining(self, risk: RiskState) -> float:
         return max(0.0, risk.current_capital_usd - risk.reserved_capital_usd)
 
+    def _effective_max_trade_dollars(self, risk: RiskState) -> float:
+        capital_cap = self._capital_remaining(risk) * max(0.0, self.cfg.max_principal_fraction_per_trade)
+        return max(0.0, min(self.cfg.max_dollars_per_trade, capital_cap if capital_cap > 0 else self.cfg.max_dollars_per_trade))
+
+    def _sized_contract_qty(self, entry_cents: float, risk: RiskState) -> int:
+        return max(1, int(self._effective_max_trade_dollars(risk) / max(0.01, entry_cents / 100.0)))
+
+    def _entry_gate_reason(self, snapshot: BTC15mMarketSnapshot, risk: RiskState) -> str | None:
+        if risk.adverse_ticks_remaining > 0:
+            reason = risk.last_adverse_reason or "recent adverse evidence"
+            return f"Conservative cooldown active for {risk.adverse_ticks_remaining} more observation(s) after {reason}."
+        if mins_left := snapshot.time_remaining.total_seconds() / 60.0:
+            if mins_left <= self.cfg.min_time_to_close_min:
+                return "Too close to resolution; no-entry final 3-minute window."
+        if snapshot.spread_cents > self.cfg.max_spread_cents:
+            return "Spread too wide for controlled entry."
+        if snapshot.min_depth < self.cfg.min_depth_contracts:
+            return "Insufficient top-of-book depth."
+        if snapshot.orderbook_stability_bps > self.cfg.max_orderbook_instability_bps:
+            return "Order book is unstable / repricing too fast."
+        return None
+
     def _manual_paper_enabled(self) -> bool:
         return bool(self.cfg.manual_paper_enabled or self.cfg.vol_bwk_enabled)
 
@@ -365,7 +387,7 @@ class BTC15mExecutionAgent:
         mins_left = max(0.0, snapshot.time_remaining.total_seconds() / 60.0)
         entry_fee_rate = 2.0 * self.cfg.fee_bps_per_side / 10000.0
         inventory_state = risk.inventory_state
-        qty = max(1, risk.inventory_qty) if inventory_state != "FLAT" else max(1, int(self.cfg.max_dollars_per_trade / max(0.01, self.cfg.manual_entry_cents / 100.0)))
+        qty = max(1, risk.inventory_qty) if inventory_state != "FLAT" else self._sized_contract_qty(self.cfg.manual_entry_cents, risk)
         target_exit_cents = max(self.cfg.manual_entry_cents, int(round(self.cfg.manual_entry_cents + self.cfg.manual_profit_target_usd / max(qty, 1) * 100.0)))
         entry_band_low_cents, entry_band_high_cents = self._manual_entry_yes_equivalent_band()
 
@@ -383,6 +405,11 @@ class BTC15mExecutionAgent:
         realizable_cents = 0.0
         stop_loss_usd = 0.0
 
+        persistence_needed = max(1, int(self.cfg.signal_persistence_ticks))
+        pending_side = risk.pending_entry_side
+        pending_count = risk.pending_entry_count
+        adverse_reason: str | None = None
+
         if inventory_state == "FLAT":
             candidates: list[tuple[int, Literal["YES", "NO"], int, int]] = []
             for side, ask_cents in (("YES", snapshot.yes_ask_cents), ("NO", snapshot.no_ask_cents)):
@@ -394,18 +421,32 @@ class BTC15mExecutionAgent:
                 trend_block = self._btc_trend_blocks_entry(chosen_side, snapshot, risk)
                 if trend_block is not None:
                     rationale = trend_block
+                    adverse_reason = trend_block
+                    pending_side = None
+                    pending_count = 0
                 else:
-                    fee_cents = ask_cents * entry_fee_rate
-                    cost_cents = ask_cents
-                    reward_cents = max(0.0, target_exit_cents - ask_cents)
-                    score_cents = reward_cents - fee_cents
-                    rationale = (
-                        f"manual entry: buy {chosen_side} at {ask_cents}c "
-                        f"(intended YES price {intended_yes_price}c) near {self.cfg.manual_entry_cents}c "
-                        f"with ${qty * ask_cents / 100.0:.2f} paper notional"
-                    )
-                    action = "buy_yes" if chosen_side == "YES" else "buy_no"
-                    next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
+                    pending_count = pending_count + 1 if pending_side == chosen_side else 1
+                    pending_side = chosen_side
+                    if pending_count < persistence_needed:
+                        rationale = (
+                            f"signal persistence guard: observed {chosen_side} setup {pending_count}/{persistence_needed} "
+                            f"times before entry."
+                        )
+                    else:
+                        fee_cents = ask_cents * entry_fee_rate
+                        cost_cents = ask_cents
+                        reward_cents = max(0.0, target_exit_cents - ask_cents)
+                        score_cents = reward_cents - fee_cents
+                        rationale = (
+                            f"manual entry: buy {chosen_side} at {ask_cents}c "
+                            f"(intended YES price {intended_yes_price}c) near {self.cfg.manual_entry_cents}c "
+                            f"with ${qty * ask_cents / 100.0:.2f} paper notional after {pending_count} confirming observations"
+                        )
+                        action = "buy_yes" if chosen_side == "YES" else "buy_no"
+                        next_state = "LONG_YES" if chosen_side == "YES" else "LONG_NO"
+            else:
+                pending_side = None
+                pending_count = 0
         else:
             is_yes = inventory_state == "LONG_YES"
             mark_bid = snapshot.yes_bid_cents if is_yes else snapshot.no_bid_cents
@@ -418,13 +459,14 @@ class BTC15mExecutionAgent:
             fee_cents = mark_bid * entry_fee_rate
             realizable_cents = unrealized_cents - fee_cents
             realizable_profit_usd = qty * realizable_cents / 100.0
-            stop_loss_usd = qty * self.cfg.stop_loss_cents / 100.0
+            effective_stop_cents = max(1, self.cfg.stop_loss_cents - (1 if mins_left <= self.cfg.min_time_to_close_min + 2.0 else 0))
+            stop_loss_usd = qty * effective_stop_cents / 100.0
             rationale = (
                 f"manual hold: waiting for ${self.cfg.manual_profit_target_usd:.2f} paper PnL target, "
                 f"-${stop_loss_usd:.2f} hard stop, or 3-minute forced exit"
             )
             should_exit_for_profit = realizable_profit_usd >= self.cfg.manual_profit_target_usd
-            should_exit_for_stop = unrealized_profit_usd <= -stop_loss_usd or realizable_profit_usd <= -stop_loss_usd
+            should_exit_for_stop = realizable_profit_usd <= -stop_loss_usd or unrealized_profit_usd <= -(stop_loss_usd * 1.25)
             should_exit_for_time = mins_left <= self.cfg.min_time_to_close_min
             if should_exit_for_profit or should_exit_for_stop or should_exit_for_time:
                 cost_cents = -mark_bid
@@ -438,7 +480,7 @@ class BTC15mExecutionAgent:
                 elif should_exit_for_profit:
                     exit_reason = f"net paper PnL ${realizable_profit_usd:.2f}"
                 else:
-                    exit_reason = f"3-minute cutoff with net paper PnL ${realizable_profit_usd:.2f}"
+                    exit_reason = f"forced time exit at 3-minute cutoff with net paper PnL ${realizable_profit_usd:.2f}"
                 rationale = f"manual exit: sell {side} at {mark_bid}c with {exit_reason}"
                 action = "sell_yes" if is_yes else "sell_no"
                 next_state = "FLAT"
@@ -485,6 +527,10 @@ class BTC15mExecutionAgent:
             "unrealized_cents": unrealized_cents,
             "realizable_cents": realizable_cents if inventory_state != "FLAT" else 0.0,
             "stop_loss_usd": stop_loss_usd if inventory_state != "FLAT" else 0.0,
+            "pending_entry_side": pending_side,
+            "pending_entry_count": pending_count,
+            "trigger_adverse_cooldown": adverse_reason is not None,
+            "adverse_reason": adverse_reason,
             "btc_basis_source": basis_source,
             "btc_basis_value": current_basis,
             "btc_basis_slope": slope,
@@ -570,7 +616,7 @@ class BTC15mExecutionAgent:
         if self._manual_paper_enabled():
             next_inventory = manual_info.get("manual_next_state", risk.inventory_state)
             entry_basis_cents = snapshot.yes_ask_cents if manual_info.get("manual_action", "").startswith("buy_yes") else snapshot.no_ask_cents if manual_info.get("manual_action", "").startswith("buy_no") else snapshot.yes_bid_cents if manual_info.get("manual_action") == "sell_yes" else snapshot.no_bid_cents if manual_info.get("manual_action") == "sell_no" else 100
-            sized_qty = max(1, int(self.cfg.max_dollars_per_trade / max(0.01, entry_basis_cents / 100.0)))
+            sized_qty = self._sized_contract_qty(entry_basis_cents, risk)
             qty = risk.inventory_qty or sized_qty
             resulting_capital = risk.current_capital_usd - qty * (manual_info.get("manual_cost_cents") or 0.0) / 100.0
             visible_action = manual_info.get("manual_action", "skip")
@@ -672,6 +718,18 @@ class BTC15mExecutionAgent:
             next_state.last_btc_basis = float(basis_value)
             next_state.last_btc_slope = None if previous_basis is None else float(basis_value) - float(previous_basis)
 
+        if next_state.inventory_state == "FLAT":
+            next_state.pending_entry_side = decision.state_context.get("pending_entry_side") if decision.state_context else None
+            next_state.pending_entry_count = int(decision.state_context.get("pending_entry_count", 0)) if decision.state_context else 0
+            if decision.state_context and decision.state_context.get("trigger_adverse_cooldown"):
+                next_state.adverse_ticks_remaining = max(next_state.adverse_ticks_remaining, int(self.cfg.adverse_cooldown_ticks))
+                next_state.last_adverse_reason = decision.state_context.get("adverse_reason")
+            elif next_state.adverse_ticks_remaining > 0:
+                next_state.adverse_ticks_remaining -= 1
+        else:
+            next_state.pending_entry_side = None
+            next_state.pending_entry_count = 0
+
         if decision.decision != "TRADE" and decision.action not in {"sell_yes", "sell_no"}:
             return next_state
 
@@ -690,6 +748,10 @@ class BTC15mExecutionAgent:
             next_state.reserved_capital_usd += max(0.0, cost_usd)
             next_state.current_capital_usd -= max(0.0, cost_usd)
             next_state.open_positions = 1
+            next_state.pending_entry_side = None
+            next_state.pending_entry_count = 0
+            next_state.adverse_ticks_remaining = 0
+            next_state.last_adverse_reason = None
         elif action.startswith("buy_no") or action == "enter_long_no":
             if next_state.last_completed_ticker != decision.ticker:
                 next_state.market_round_trip_complete = False
@@ -700,6 +762,10 @@ class BTC15mExecutionAgent:
             next_state.reserved_capital_usd += max(0.0, cost_usd)
             next_state.current_capital_usd -= max(0.0, cost_usd)
             next_state.open_positions = 1
+            next_state.pending_entry_side = None
+            next_state.pending_entry_count = 0
+            next_state.adverse_ticks_remaining = 0
+            next_state.last_adverse_reason = None
         elif action in {"sell_yes", "sell_no"}:
             released = max(0.0, -cost_usd)
             next_state.current_capital_usd += released
@@ -718,6 +784,11 @@ class BTC15mExecutionAgent:
             next_state.open_positions = 0
             next_state.last_completed_ticker = decision.ticker
             next_state.market_round_trip_complete = True
+            next_state.pending_entry_side = None
+            next_state.pending_entry_count = 0
+            if realized < 0:
+                next_state.adverse_ticks_remaining = max(next_state.adverse_ticks_remaining, int(self.cfg.adverse_cooldown_ticks))
+                next_state.last_adverse_reason = f"realized loss of ${realized:.2f}"
 
         next_state.trades_last_hour += 1
         if fee_usd > 0 and abs(cost_usd) > 0 and abs(fee_usd) / max(abs(cost_usd), 1e-9) > self.cfg.max_bad_slippage_cents / 100.0:

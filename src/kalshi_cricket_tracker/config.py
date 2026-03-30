@@ -98,6 +98,7 @@ class BTC15mExecConfig(BaseModel):
     target_take_profit_cents: int = 2
     min_confidence: int = 60
     max_dollars_per_trade: float = 100.0
+    max_principal_fraction_per_trade: float = 1.0
     profit_target_fraction: float = 0.10
     max_simultaneous_positions: int = 1
     max_daily_loss_usd: float = 150.0
@@ -109,6 +110,8 @@ class BTC15mExecConfig(BaseModel):
     safety_buffer_cents: float = 1.0
     max_slippage_cents: float = 2.0
     stop_loss_cents: int = 3
+    signal_persistence_ticks: int = 1
+    adverse_cooldown_ticks: int = 0
     size_kelly_fraction: float = 0.1
     min_ev_to_trade_cents: float = 0.5
     bwk_lambda_cost: float = 0.02
